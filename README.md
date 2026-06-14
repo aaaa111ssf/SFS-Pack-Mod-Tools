@@ -2,8 +2,9 @@
 基于 UnityPy 的 SFS.pack 写入脚本，主要用于汉化模组。  
 
 # 使用方法  
-安装 UnityPy  
+## 安装 UnityPy和tkinter  
 pip install UnityPy    
+pip install tkinter
 在 cmd 窗口运行脚本  
 
 将脚本与所需文件放在同一目录下，执行：  
@@ -18,7 +19,6 @@ mod_CN.pack —— 汉化后的 pack 文件
 # texts_to_translated_zh.json 格式示例  
 Json  
 {  
-  "-9177355032084777435": {  
     "Height": "高度",  
     "Width": "宽度",  
     "Angle": "角度",  
