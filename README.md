@@ -31,8 +31,6 @@ python script_name.py
 - `mod_CN.pack` — The localized pack file.  
   `mod_CN.pack` —— 汉化后的 pack 文件
 
-*(The original JSON file remains unchanged; no modification needed.)*  
-*（原始 JSON 文件保持不变，无需修改）*
 
 ---
 
@@ -65,5 +63,5 @@ If any text is missed, you can manually add it. **Note: It must match the in-gam
 ---
 
 ## Contact | 联系方式
-If you have any questions or feedback, please contact QQ: 2107478976  
-如有问题或反馈，请联系 QQ：2107478976
+If you have any questions or feedback, please contact QQ: 2107478976 Discord:afuturestar_78289   
+如有问题或反馈，请联系 QQ：2107478976 Discord:afuturestar_78289  
