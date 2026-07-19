@@ -20,6 +20,19 @@ Place the script and required files in the same directory, then execute:
 ```bash
 python script_name.py
 ```
+### termux
+```bash
+# 1. 安装依赖
+pkg install python
+pip install UnityPy
+# 2. 直接运行交互菜单
+python v20-CN.py
+# 3. 或直接用命令行参数
+# 提取文本
+python v20-CN.py -i mod.pack -m extract
+# 一键处理
+python v20-CN.py -i mod.pack -m auto -o mod_CN.pack
+```
 
 ### Required Files | 所需文件（与脚本位于同一目录）
 - `mod.pack` — The original mod pack file.  
