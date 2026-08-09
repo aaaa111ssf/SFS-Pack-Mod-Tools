@@ -1,26 +1,28 @@
-# SFS-pack Mod Localization Script | SFS-pack 模组汉化脚本
-A UnityPy-based SFS.pack writing script, primarily used for mod localization.  
+# SFS-pack 模组汉化脚本
+
+[English](README_EN.md)
+
 基于 UnityPy 的 SFS.pack 写入脚本，主要用于汉化模组。
 
----
+## 使用方法
 
-## Usage | 使用方法
+### 安装 UnityPy 和 tkinter
 
-### Install UnityPy and tkinter | 安装 UnityPy 和 tkinter
 ```bash
 pip install UnityPy
 pip install tkinter
 ```
-Run the script in the CMD window.  
+
 在 cmd 窗口运行脚本。
 
-Place the script and required files in the same directory, then execute:  
 将脚本与所需文件放在同一目录下，执行：
 
 ```bash
 python script_name.py
 ```
+
 ### termux
+
 ```bash
 # 1. 安装依赖
 pkg install python
@@ -34,20 +36,16 @@ python v20-CN.py -i mod.pack -m extract
 python v20-CN.py -i mod.pack -m auto -o mod_CN.pack
 ```
 
-### Required Files | 所需文件（与脚本位于同一目录）
-- `mod.pack` — The original mod pack file.  
-  `mod.pack` —— 原始模组 pack 文件
-- `texts_to_translated_zh.json` — The JSON file containing texts to be translated (format see below).  
-  `texts_to_translated_zh.json` —— 待翻译的文本 JSON 文件（格式见下方）
+### 所需文件（与脚本位于同一目录）
 
-### Output File | 输出文件
-- `mod_CN.pack` — The localized pack file.  
-  `mod_CN.pack` —— 汉化后的 pack 文件
+- `mod.pack`：原始模组 pack 文件
+- `texts_to_translated_zh.json`：待翻译的文本 JSON 文件（格式见下方）
 
+### 输出文件
 
----
+- `mod_CN.pack`：汉化后的 pack 文件
 
-## `texts_to_translated_zh.json` Format Example | 格式示例
+## `texts_to_translated_zh.json` 格式示例
 
 ```json
 {
@@ -66,15 +64,10 @@ python v20-CN.py -i mod.pack -m auto -o mod_CN.pack
 }
 ```
 
----
+## 重要注意事项
 
-## ⚠️ Important Notes | 重要注意事项
+若有漏掉的文本，可以使用手动添加。注意：必须与游戏显示文本完全相同，一个字都不能少。
 
-If any text is missed, you can manually add it. **Note: It must match the in-game displayed text exactly, not a single character less.**  
-若有漏掉的文本，可以使用手动添加。**注意：必须与游戏显示文本完全相同，一个字都不能少。**
+## 联系方式
 
----
-
-## Contact | 联系方式
-If you have any questions or feedback, please contact QQ: 2107478976 Discord:afuturestar_78289   
-如有问题或反馈，请联系 QQ：2107478976 Discord:afuturestar_78289  
+如有问题或反馈，请联系 QQ：2107478976 Discord:afuturestar_78289
