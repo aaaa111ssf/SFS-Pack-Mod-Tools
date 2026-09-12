@@ -34,13 +34,13 @@ SFS Pack Tool 用于处理 SFS `.pack` 模组文件。它可以提取可翻译�
 
 ## 下载与启动
 
-请下载发行包中的 EXE，并放置到一个你有写入权限的普通文件夹，例如 `D:\Tools\SFS Pack Tool\`。双击 `SFS_Pack_Tool_v22_Embedded_GPL.exe` 启动即可。程序带有 AFuturestar 自签名证书；如果 Windows 显示未知发布者或 SmartScreen 提示，可先核对发行包中的公开证书与 SHA-256 签名信息，再按你的安全策略决定是否运行。
+请下载发行包中的 EXE，并放置到一个你有写入权限的普通文件夹，例如 `D:\Tools\SFS Pack Tool\`。双击 `SFS_Pack_Tool_v2.3_Embedded_GPL_prev.exe` 启动即可。程序带有 AFuturestar 自签名证书；如果 Windows 显示未知发布者或 SmartScreen 提示，可先核对发行包中的公开证书与 SHA-256 签名信息，再按你的安全策略决定是否运行。
 
 内置 AssetRipper 已随程序打包，无需单独下载。首次导出时它会释放到 EXE 旁边的 `AssetRipper-1.1.4` 文件夹；若 EXE 所在目录没有写入权限，程序会改用当前用户的本地应用数据目录。该过程仅创建或补齐工具自身的文件，不会删除已有文件。
 
 | 文件或位置 | 用途 |
 | --- | --- |
-| `SFS_Pack_Tool_v22_Embedded_GPL.exe` | 主程序，已内置运行包 |
+| `SFS_Pack_Tool_v2.3_Embedded_GPL_prev.exe` | 主程序，已内置运行包 |
 | `AssetRipper-1.1.4/` | 首次导出后自动释放的内置 AssetRipper 文件 |
 | `%LOCALAPPDATA%\AFuturestar\SFS-Pack-Tool\` | EXE 同目录不可写时的备用释放位置 |
 | `settings.json` | 自动保存语言、作者标识、路径等偏好 |
