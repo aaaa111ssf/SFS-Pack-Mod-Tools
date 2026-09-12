@@ -11,7 +11,7 @@ SFS Pack Tool 用于处理 SFS `.pack` 模组文件。它可以提取可翻译�
 | 项目 | 说明 |
 | --- | --- |
 | 适用系统 | Windows 64 位 |
-| 主程序 | `SFS_Pack_Tool_v22_Embedded_GPL.exe` |
+| 主程序 | `SFS_Pack_Tool_v2.3_Embedded_GPL_prev.exe` |
 | 内置导出器 | AssetRipper 1.1.4 Windows x64（强制内置，无手动选择/下载） |
 | 默认语言 | 中文，可在窗口右上角切换为 English |
 | 许可证 | GPL-3.0-or-later；随附完整许可证、对应源码和第三方材料 |
