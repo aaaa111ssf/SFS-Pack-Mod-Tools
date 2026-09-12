@@ -23,15 +23,15 @@ from pathlib import Path
 from typing import Iterable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-# PyInstaller 单文件 EXE 解压到临时目录；下载的 AssetRipper 必须放在 EXE 旁边而非临时目录。
+# 单文件 EXE 运行时解压到临时目录；AssetRipper 需放在 EXE 旁而非临时目录。
 RUNTIME_DATA_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else SCRIPT_DIR
 ASSET_RIPPER_REPOSITORY = "https://github.com/AssetRipper/AssetRipper/releases/latest/download"
-ASSET_RIPPER_COMPATIBILITY_VERSION = "1.1.4"
 ASSET_RIPPER_CRASH_CODES = {3221226505, -1073740791}
 BUILD_KEYS = ("WindowsBuild", "AndroidBuild", "MacBuild", "IOS_Build")
 
 
 class ExportError(RuntimeError):
+    """导出过程中的可预期错误（嵌套影响链上的代码缩进）。"""
 
 
 class AssetRipperExitError(ExportError):
@@ -39,8 +39,8 @@ class AssetRipperExitError(ExportError):
         self.returncode = returncode
         self.log_path = log_path
         super().__init__(
-            f"AssetRipper 启动后立即退出，退出码：{returncode}。日志：{log_path}。\n"
-            f"日志末尾：\n{log_tail(log_path)}"
+            f"AssetRipper 启动后立即退出 退出码 {returncode} 日志 {log_path}\n"
+            f"日志末尾\n{log_tail(log_path)}"
         )
 
 
@@ -66,7 +66,7 @@ def platform_asset_name() -> str:
         return "AssetRipper_mac_arm64.tar.xz" if arm64 else "AssetRipper_mac_x64.tar.xz"
     if system == "linux":
         return "AssetRipper_linux_arm64.tar.xz" if arm64 else "AssetRipper_linux_x64.tar.xz"
-    raise ExportError(f"暂不支持的操作系统：{platform.system()}。请使用 --asset-ripper 指定 AssetRipper 可执行文件。")
+    raise ExportError(f"暂不支持的操作系统 {platform.system()} 请使用 --asset-ripper 指定 AssetRipper 可执行文件")
 
 
 def executable_candidates(directory: Path) -> Iterable[Path]:
@@ -74,6 +74,46 @@ def executable_candidates(directory: Path) -> Iterable[Path]:
     for candidate in directory.rglob("*"):
         if candidate.is_file() and candidate.name in names:
             yield candidate
+
+
+def bundled_asset_ripper_candidates() -> list[Path]:
+    """在【打包内置】与【工程 third_party】里查找自带 AssetRipper，避免联网下载卡死。
+
+    优先级：exe/_MEIPASS 内 third_party -> 源码目录 third_party -> 旧约定 .assetripper。
+    """
+    roots: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(Path(meipass))          # 单文件 EXE 解压目录（spec datas 里的 third_party）
+    if not getattr(sys, "frozen", False):
+        roots.append(SCRIPT_DIR)             # 源码模式：build_kit/third_party/...
+    roots.append(RUNTIME_DATA_DIR)           # 旧版约定 exe/脚本旁 .assetripper
+
+    result: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        for sub in ("third_party/assetripper-1.1.4", "third_party/assetripper", ".assetripper"):
+            directory = root / sub
+            if not directory.is_dir():
+                continue
+            for candidate in executable_candidates(directory):
+                key = str(candidate.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    result.append(candidate)
+    return result
+
+
+def _validate_zip_members(archive: zipfile.ZipFile, root: Path) -> None:
+    """校验 zip 内所有成员都在 root 之下，拒绝绝对路径 / .. 路径穿越。"""
+    root = root.resolve()
+    for info in archive.infolist():
+        name = info.filename
+        if name.startswith("/") or name.startswith("\\") or ":" in name.split("/", 1)[0]:
+            raise ExportError(f"压缩包含非法绝对路径成员 {name}")
+        dest = (root / name).resolve()
+        if dest != root and root not in dest.parents:
+            raise ExportError(f"压缩包成员路径越界 路径穿越 {name}")
 
 
 def install_asset_ripper(tool_directory: Path, version: str | None = None) -> Path:
@@ -87,29 +127,35 @@ def install_asset_ripper(tool_directory: Path, version: str | None = None) -> Pa
 
     tool_directory.mkdir(parents=True, exist_ok=True)
     label = f"兼容版 {version}" if version else "最新版"
-    log(f"[*] 未找到 AssetRipper，正在下载{label}：{asset_name}")
+    log(f"[*] 未找到 AssetRipper 正在下载{label} {asset_name}")
     try:
         with urllib.request.urlopen(url, timeout=60) as response, download_path.open("wb") as output:
             shutil.copyfileobj(response, output)
     except urllib.error.URLError as exc:
-        raise ExportError(f"下载 AssetRipper 失败：{exc}。可手动下载后使用 --asset-ripper 指定可执行文件。") from exc
+        raise ExportError(f"下载 AssetRipper 失败 {exc} 可手动下载后使用 --asset-ripper 指定可执行文件") from exc
 
     try:
         if asset_name.endswith(".zip"):
+            root = tool_directory.resolve()
             with zipfile.ZipFile(download_path) as archive:
-                archive.extractall(tool_directory)
+                _validate_zip_members(archive, root)
+                archive.extractall(root)
         else:
             with tarfile.open(download_path, mode="r:xz") as archive:
-                archive.extractall(tool_directory)
+                # filter="data" 仅 Python>=3.12 支持；旧版本退化为默认提取（AssetRipper 为官方可信包）。
+                if sys.version_info >= (3, 12):
+                    archive.extractall(tool_directory, filter="data")
+                else:
+                    archive.extractall(tool_directory)
     except (OSError, tarfile.TarError, zipfile.BadZipFile) as exc:
-        raise ExportError(f"解压 AssetRipper 失败：{exc}") from exc
+        raise ExportError(f"解压 AssetRipper 失败 {exc}") from exc
     finally:
         if download_path.exists():
             download_path.unlink()
 
     candidates = list(executable_candidates(tool_directory))
     if not candidates:
-        raise ExportError("AssetRipper 已下载，但未找到 AssetRipper.GUI.Free 可执行文件。")
+        raise ExportError("AssetRipper 已下载 但未找到 AssetRipper.GUI.Free 可执行文件")
 
     executable = candidates[0]
     if os.name != "nt":
@@ -121,19 +167,22 @@ def resolve_asset_ripper(user_value: str | None, auto_download: bool) -> Path:
     if user_value:
         candidate = Path(user_value).expanduser().resolve()
         if not candidate.is_file():
-            raise ExportError(f"指定的 AssetRipper 不存在：{candidate}")
+            raise ExportError(f"指定的 AssetRipper 不存在 {candidate}")
         return candidate
 
-    tool_directory = RUNTIME_DATA_DIR / ".assetripper"
-    candidates = list(executable_candidates(tool_directory)) if tool_directory.exists() else []
-    if candidates:
-        executable = candidates[0]
+    bundled = bundled_asset_ripper_candidates()
+    if bundled:
+        executable = bundled[0]
         if os.name != "nt":
             executable.chmod(executable.stat().st_mode | 0o111)
         return executable
     if not auto_download:
-        raise ExportError("未找到 AssetRipper。删除 --no-download，或用 --asset-ripper 指定可执行文件。")
-    return install_asset_ripper(tool_directory)
+        hint = Path(getattr(sys, "_MEIPASS", RUNTIME_DATA_DIR)) / "third_party" / "assetripper-1.1.4"
+        raise ExportError(
+            f"未找到 AssetRipper 内置版本缺失 请确认以下位置存在"
+            f"AssetRipper.GUI.Free.exe {hint} 或使用 --asset-ripper 指定其它可执行文件"
+        )
+    return install_asset_ripper(RUNTIME_DATA_DIR / ".assetripper")
 
 
 def read_pack(input_path: Path) -> dict:
@@ -141,9 +190,9 @@ def read_pack(input_path: Path) -> dict:
         with input_path.open("r", encoding="utf-8-sig") as handle:
             data = json.load(handle)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ExportError(f"无法读取 .pack JSON：{exc}") from exc
+        raise ExportError(f"无法读取 .pack JSON {exc}") from exc
     if not isinstance(data, dict):
-        raise ExportError(".pack 根节点必须是 JSON 对象。")
+        raise ExportError(".pack 根节点必须是 JSON 对象")
     return data
 
 
@@ -158,20 +207,20 @@ def decode_pack_resources(input_path: Path, destination: Path) -> list[Path]:
         if value is None:
             continue
         if not isinstance(value, str):
-            log(f"[!] 跳过 {key}：该字段不是 Base64 字符串。")
+            log(f"[!] 跳过 {key} 该字段不是 Base64 字符串")
             continue
         try:
             raw = base64.b64decode(value, validate=True)
         except (ValueError, UnicodeError) as exc:
-            log(f"[!] 跳过 {key}：Base64 解码失败（{exc}）。")
+            log(f"[!] 跳过 {key} Base64 解码失败 {exc}")
             continue
         if not raw.startswith(b"UnityFS"):
-            log(f"[!] 跳过 {key}：解码内容不是 UnityFS AssetBundle。")
+            log(f"[!] 跳过 {key} 解码内容不是 UnityFS AssetBundle")
             continue
         bundle_path = destination / f"{key}.bundle"
         bundle_path.write_bytes(raw)
         bundles.append(bundle_path)
-        log(f"[+] 已解码 {key}：{len(raw):,} 字节")
+        log(f"[+] 已解码 {key} {len(raw):,} 字节")
 
     code_assembly = data.get("CodeAssembly")
     if isinstance(code_assembly, str) and code_assembly:
@@ -179,13 +228,13 @@ def decode_pack_resources(input_path: Path, destination: Path) -> list[Path]:
             assembly_bytes = base64.b64decode(code_assembly, validate=True)
             assembly_path = destination / "CodeAssembly.dll"
             assembly_path.write_bytes(assembly_bytes)
-            log(f"[+] 已解码 CodeAssembly：{len(assembly_bytes):,} 字节")
+            log(f"[+] 已解码 CodeAssembly {len(assembly_bytes):,} 字节")
         except (ValueError, UnicodeError) as exc:
-            log(f"[!] CodeAssembly 解码失败，继续只导出资源：{exc}")
+            log(f"[!] CodeAssembly 解码失败 继续只导出资源 {exc}")
 
     if not bundles:
-        keys = ", ".join(BUILD_KEYS)
-        raise ExportError(f"未在 .pack 中找到可用 UnityFS AssetBundle（检查字段：{keys}）。")
+        keys = ",".join(BUILD_KEYS)
+        raise ExportError(f"未在 .pack 中找到可用 UnityFS AssetBundle 检查字段 {keys}")
     return bundles
 
 
@@ -198,9 +247,9 @@ def unused_local_port() -> int:
 def log_tail(log_path: Path, limit: int = 4000) -> str:
     try:
         text = log_path.read_text(encoding="utf-8", errors="replace").strip()
-        return text[-limit:] if text else "日志为空。"
+        return text[-limit:] if text else "日志为空"
     except OSError as exc:
-        return f"无法读取日志：{exc}"
+        return f"无法读取日志 {exc}"
 
 
 def has_unsupported_advanced_options(log_path: Path) -> bool:
@@ -221,7 +270,7 @@ def wait_for_server(base_url: str, process: subprocess.Popen[object], log_path: 
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             latest_error = str(exc)
         time.sleep(0.4)
-    raise ExportError(f"等待 AssetRipper 服务超时：{latest_error}。日志：{log_path}。")
+    raise ExportError(f"等待 AssetRipper 服务超时 {latest_error} 日志 {log_path}")
 
 
 def post_path(base_url: str, endpoint: str, target_path: Path) -> None:
@@ -237,7 +286,7 @@ def post_path(base_url: str, endpoint: str, target_path: Path) -> None:
         with urllib.request.urlopen(request, timeout=900) as response:
             response.read()
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise ExportError(f"AssetRipper 请求 {endpoint} 失败：{exc}") from exc
+        raise ExportError(f"AssetRipper 请求 {endpoint} 失败 {exc}") from exc
 
 
 def start_asset_ripper(
@@ -260,7 +309,7 @@ def start_asset_ripper(
         )
     except OSError as exc:
         log_file.close()
-        raise ExportError(f"无法启动 AssetRipper：{exc}") from exc
+        raise ExportError(f"无法启动 AssetRipper {exc}") from exc
 
 
 def stop_process(process: subprocess.Popen[object]) -> None:
@@ -288,38 +337,66 @@ def list_project_files(directory: Path) -> list[str]:
 def validate_project(project_dir: Path) -> dict:
     assets_dir = project_dir / "Assets"
     if not assets_dir.is_dir():
-        raise ExportError("AssetRipper 完成后未生成 Assets 目录。")
-
-    prefabs = sorted(assets_dir.rglob("*.prefab"))
-    if not prefabs:
-        raise ExportError("AssetRipper 完成后未找到任何 .prefab 文件。")
-
-    yaml_prefabs = 0
-    for prefab in prefabs:
-        try:
-            if prefab.read_bytes().startswith(b"%YAML 1.1"):
-                yaml_prefabs += 1
-        except OSError:
-            continue
-    if yaml_prefabs == 0:
-        raise ExportError("已找到 .prefab 文件，但均未包含 Unity YAML 头。")
+        raise ExportError("AssetRipper 完成后未生成 Assets 目录")
 
     texture_extensions = {".png", ".jpg", ".jpeg", ".tga", ".bmp", ".gif", ".psd", ".exr", ".hdr", ".dds"}
     audio_extensions = {".wav", ".mp3", ".ogg", ".aiff", ".flac"}
+    material_extensions = {".mat"}
+    shader_extensions = {".shader", ".shadergraph"}
+    script_extensions = {".cs", ".dll"}
+    asset_extensions = {".asset"}
+    prefab_extensions = {".prefab"}
+    meta_extensions = {".meta"}
+
+    prefabs: list[Path] = []
+    yaml_prefabs = 0
+    counts = {k: 0 for k in ("texture", "material", "shader", "script", "audio", "asset_file", "meta_file")}
+    total_files = 0
+    for item in assets_dir.rglob("*"):
+        if not item.is_file():
+            continue
+        total_files += 1
+        suffix = item.suffix.lower()
+        if suffix in prefab_extensions:
+            prefabs.append(item)
+            try:
+                if item.read_bytes().startswith(b"%YAML 1.1"):
+                    yaml_prefabs += 1
+            except OSError:
+                pass
+        if suffix in texture_extensions:
+            counts["texture"] += 1
+        elif suffix in material_extensions:
+            counts["material"] += 1
+        elif suffix in shader_extensions:
+            counts["shader"] += 1
+        elif suffix in script_extensions:
+            counts["script"] += 1
+        elif suffix in audio_extensions:
+            counts["audio"] += 1
+        elif suffix in asset_extensions:
+            counts["asset_file"] += 1
+        elif suffix in meta_extensions:
+            counts["meta_file"] += 1
+
+    if not prefabs:
+        raise ExportError("AssetRipper 完成后未找到任何 .prefab 文件")
+    if yaml_prefabs == 0:
+        raise ExportError("已找到 .prefab 文件 但均未包含 Unity YAML 头")
+
     packages_dir = project_dir / "Packages"
     settings_dir = project_dir / "ProjectSettings"
-
     return {
         "prefab_count": len(prefabs),
         "unity_yaml_prefab_count": yaml_prefabs,
-        "texture_count": count_files(assets_dir, texture_extensions),
-        "material_count": count_files(assets_dir, {".mat"}),
-        "shader_count": count_files(assets_dir, {".shader", ".shadergraph"}),
-        "script_count": count_files(assets_dir, {".cs", ".dll"}),
-        "audio_count": count_files(assets_dir, audio_extensions),
-        "asset_file_count": count_files(assets_dir, {".asset"}),
-        "meta_file_count": count_files(assets_dir, {".meta"}),
-        "asset_total_file_count": sum(1 for item in assets_dir.rglob("*") if item.is_file()),
+        "texture_count": counts["texture"],
+        "material_count": counts["material"],
+        "shader_count": counts["shader"],
+        "script_count": counts["script"],
+        "audio_count": counts["audio"],
+        "asset_file_count": counts["asset_file"],
+        "meta_file_count": counts["meta_file"],
+        "asset_total_file_count": total_files,
         "has_packages_directory": packages_dir.is_dir(),
         "has_project_settings_directory": settings_dir.is_dir(),
         "package_files": list_project_files(packages_dir),
@@ -334,33 +411,33 @@ def write_export_manifest(project_dir: Path, input_path: Path, inventory: dict) 
         "exporter": "sfs_pack_prefab_export.py",
         "inventory": inventory,
         "notes": [
-            "Assets 目录包含实际 Prefab、贴图、材质和其他可恢复资源。",
-            "请保留 .meta 文件，以维持导出项目内的 GUID 引用。",
-            "自定义脚本可能仍依赖原游戏程序集 因此不能保证能编译。",
+            "Assets 目录包含实际 Prefab 贴图 材质和其他可恢复资源",
+            "请保留 .meta 文件 以维持导出项目内的 GUID 引用",
+            "自定义脚本可能仍依赖原游戏程序集 因此不能保证能编译",
         ],
     }
     (project_dir / "EXPORT_MANIFEST.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
-    readme = f'''# SFS .pack 导出工程\n\n该目录由 `sfs_pack_prefab_export.py` 从 `{input_path.name}` 导出。`Assets/` 下保存真实 Unity YAML Prefab 及其依赖资源。\n\n| 资源类别 | 数量 |\n| --- | ---: |\n| Prefab | {inventory["prefab_count"]} |\n| 已验证 YAML Prefab | {inventory["unity_yaml_prefab_count"]} |\n| 贴图 | {inventory["texture_count"]} |\n| 材质 | {inventory["material_count"]} |\n| Shader | {inventory["shader_count"]} |\n| 脚本/程序集导出 | {inventory["script_count"]} |\n| 音频 | {inventory["audio_count"]} |\n| Unity `.asset` 文件 | {inventory["asset_file_count"]} |\n| `.meta` 文件 | {inventory["meta_file_count"]} |\n\n`Packages/`：{"已导出" if inventory["has_packages_directory"] else "未生成"}；`ProjectSettings/`：{"已导出" if inventory["has_project_settings_directory"] else "未生成"}。完整机器可读清单见 `EXPORT_MANIFEST.json`。\n\n请使用 Unity Hub 打开此文件夹，或将整个 `Assets/` 复制至已有项目。不要省略 `.meta` 文件。\n'''
+    readme = f'''# SFS .pack 导出工程\n\n该目录由 `sfs_pack_prefab_export.py` 从 `{input_path.name}` 导出 `Assets/` 下保存真实 Unity YAML Prefab 及其依赖资源\n\n| 资源类别 | 数量 |\n| --- | ---: |\n| Prefab | {inventory["prefab_count"]} |\n| 已验证 YAML Prefab | {inventory["unity_yaml_prefab_count"]} |\n| 贴图 | {inventory["texture_count"]} |\n| 材质 | {inventory["material_count"]} |\n| Shader | {inventory["shader_count"]} |\n| 脚本/程序集导出 | {inventory["script_count"]} |\n| 音频 | {inventory["audio_count"]} |\n| Unity `.asset` 文件 | {inventory["asset_file_count"]} |\n| `.meta` 文件 | {inventory["meta_file_count"]} |\n\n`Packages/` {"已导出" if inventory["has_packages_directory"] else "未生成"} `ProjectSettings/` {"已导出" if inventory["has_project_settings_directory"] else "未生成"} 完整机器可读清单见 `EXPORT_MANIFEST.json`\n\n请使用 Unity Hub 打开此文件夹 或将整个 `Assets/` 复制至已有项目 不要省略 `.meta` 文件\n'''
     (project_dir / "EXPORT_README.md").write_text(readme, encoding="utf-8")
 
 
 def validate_output_location(input_path: Path, output_dir: Path, zip_path: Path) -> None:
     if output_dir == input_path or input_path.is_relative_to(output_dir):
         raise ExportError(
-            "工程输出目录不能是输入 .pack 所在目录或其上级目录。"
-            "请选择一个独立子文件夹，例如 Starship V3_UnityProject。"
+            "工程输出目录不能是输入 .pack 所在目录或其上级目录"
+            "请选择一个独立子文件夹 例如 Starship V3_UnityProject"
         )
     if zip_path == input_path:
-        raise ExportError("输出 ZIP 不能与输入 .pack 使用同一路径。")
+        raise ExportError("输出 ZIP 不能与输入 .pack 使用同一路径")
 
 
 def numbered_directory(path: Path) -> Path:
     candidate = path
     index = 2
-    while candidate.exists() or candidate.with_suffix(".zip").exists():
+    while candidate.exists() or Path(str(candidate) + ".zip").exists():
         candidate = path.parent / f"{path.name}_{index}"
         index += 1
     return candidate
@@ -370,28 +447,34 @@ def numbered_file(path: Path) -> Path:
     candidate = path
     index = 2
     while candidate.exists():
-        candidate = path.parent / f"{path.stem}_{index}{path.suffix}"
+        # 直接用目录名 + 序号 + 原扩展名，避开模组名里含点号导致的 with_suffix 误删
+        candidate = path.parent / f"{path.name.rsplit('.', 1)[0]}_{index}{path.suffix}"
         index += 1
     return candidate
+
+
+def _dot_safe_zip(path: Path) -> Path:
+    """返回 path 对应的 .zip 路径；模组名里含点号时 with_suffix 会误删，故此手动生成。"""
+    return Path(str(path) + ".zip")
 
 
 def export_prefabs(args: argparse.Namespace) -> None:
     input_path = Path(args.input).expanduser().resolve()
     if not input_path.is_file():
-        raise ExportError(f"输入 .pack 不存在：{input_path}")
+        raise ExportError(f"输入 .pack 不存在 {input_path}")
 
     requested_output = Path(args.output_dir).expanduser().resolve()
     requested_zip = Path(args.zip).expanduser().resolve() if args.zip else None
-    validate_output_location(input_path, requested_output, requested_zip or requested_output.with_suffix(".zip"))
+    validate_output_location(input_path, requested_output, requested_zip or _dot_safe_zip(requested_output))
     output_dir = numbered_directory(requested_output)
-    zip_path = numbered_file(requested_zip) if requested_zip else output_dir.with_suffix(".zip")
+    zip_path = numbered_file(requested_zip) if requested_zip else _dot_safe_zip(output_dir)
     if output_dir != requested_output:
-        log(f"[*] 为保护已有文件，工程将导出到新目录：{output_dir}")
+        log(f"[*] 为保护已有文件 工程将导出到新目录 {output_dir}")
     if requested_zip and zip_path != requested_zip:
-        log(f"[*] 为保护已有文件，ZIP 将保存为：{zip_path}")
+        log(f"[*] 为保护已有文件 ZIP 将保存为 {zip_path}")
 
     executable = resolve_asset_ripper(args.asset_ripper, auto_download=not args.no_download)
-    log(f"[*] 使用 AssetRipper：{executable}")
+    log(f"[*] 使用 AssetRipper {executable}")
 
     with tempfile.TemporaryDirectory(prefix="sfs_prefab_export_") as temporary_directory:
         temporary = Path(temporary_directory)
@@ -412,9 +495,9 @@ def export_prefabs(args: argparse.Namespace) -> None:
                     compatible_executable = executable
                     log("[!] 检测到旧版 AssetRipper 正在使用兼容参数重启")
                 elif exc.returncode in ASSET_RIPPER_CRASH_CODES:
-                    log(f"[!] 检测到已知 Windows 崩溃码 {exc.returncode} 正在改用兼容版 {ASSET_RIPPER_COMPATIBILITY_VERSION}")
-                    compatibility_dir = RUNTIME_DATA_DIR / f".assetripper_{ASSET_RIPPER_COMPATIBILITY_VERSION}"
-                    compatible_executable = install_asset_ripper(compatibility_dir, ASSET_RIPPER_COMPATIBILITY_VERSION)
+                    # 兼容版与本工具内置版同为 1.1.4：直接复用当前可执行文件，避免在应无网的环境里重新下载。
+                    compatible_executable = executable
+                    log(f"[!] 检测到已知 Windows 崩溃码 {exc.returncode} 改用兼容参数重启 复用内置版本 不联网下载")
                 else:
                     raise
                 stop_process(process)
@@ -425,7 +508,7 @@ def export_prefabs(args: argparse.Namespace) -> None:
                 wait_for_server(base_url, process, log_path)
             log("[*] 正在加载解码后的 AssetBundle...")
             post_path(base_url, "/LoadFolder", source_dir)
-            log("[*] 正在导出 Unity 工程与 Prefab（资源较多时请耐心等待）...")
+            log("[*] 正在导出 Unity 工程与 Prefab 资源较多时请耐心等待 ...")
             export_root.mkdir(parents=True, exist_ok=True)
             post_path(base_url, "/Export/UnityProject", export_root)
         finally:
@@ -435,42 +518,46 @@ def export_prefabs(args: argparse.Namespace) -> None:
         if not project_dir.is_dir():
             log_copy = output_dir.parent / f"{output_dir.name}_assetripper.log"
             shutil.copy2(log_path, log_copy)
-            raise ExportError(f"AssetRipper 未生成 ExportedProject。日志已复制到：{log_copy}")
+            raise ExportError(f"AssetRipper 未生成 ExportedProject 日志已复制到 {log_copy}")
 
         inventory = validate_project(project_dir)
         write_export_manifest(project_dir, input_path, inventory)
         shutil.copytree(project_dir, output_dir)
         log(
-            f"[+] 已导出 {inventory['prefab_count']} 个 Prefab（YAML：{inventory['unity_yaml_prefab_count']}），"
-            f"贴图：{inventory['texture_count']}，材质：{inventory['material_count']}，"
-            f".meta：{inventory['meta_file_count']}。"
+            f"[+] 已导出 {inventory['prefab_count']} 个 Prefab YAML {inventory['unity_yaml_prefab_count']}"
+            f"贴图 {inventory['texture_count']} 材质 {inventory['material_count']}"
+            f".meta {inventory['meta_file_count']}"
         )
         log(
-            f"[+] 工程文件：Packages={'是' if inventory['has_packages_directory'] else '否'}，"
-            f"ProjectSettings={'是' if inventory['has_project_settings_directory'] else '否'}。"
+            f"[+] 工程文件 Packages={'是' if inventory['has_packages_directory'] else '否'}"
+            f"ProjectSettings={'是' if inventory['has_project_settings_directory'] else '否'}"
         )
 
     if not args.no_zip:
         zip_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.make_archive(str(zip_path.with_suffix("")), "zip", output_dir.parent, output_dir.name)
-        log(f"[+] 已生成 ZIP：{zip_path}")
-    log(f"[✔] 完成。Unity 工程目录：{output_dir}")
+        _base = str(zip_path)
+        if _base.lower().endswith(".zip"):
+            _base = _base[:-4]  # make_archive 会自动补 .zip，这里去掉避免 .zip.zip
+        shutil.make_archive(_base, "zip", output_dir.parent, output_dir.name)
+        log(f"[+] 已生成 ZIP {zip_path}")
+    log(f"[✔] 完成 Unity 工程目录 {output_dir}")
+    return output_dir
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="从 SFS .pack 一键导出真实 Unity Prefab（调用官方 AssetRipper）。",
+        description="从 SFS .pack 一键导出真实 Unity Prefab 调用官方 AssetRipper",
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("-i", "--input", required=True, help="原始 .pack 文件路径")
     parser.add_argument(
         "-o", "--output-dir", default="SFS_Prefab_Export",
-        help="导出的 Unity 工程目录，默认：SFS_Prefab_Export",
+        help="导出的 Unity 工程目录 默认 SFS_Prefab_Export",
     )
-    parser.add_argument("--zip", help="输出 ZIP 文件路径，默认与 --output-dir 同名")
-    parser.add_argument("--asset-ripper", help="AssetRipper.GUI.Free（或 .exe）可执行文件路径")
+    parser.add_argument("--zip", help="输出 ZIP 文件路径 默认与 --output-dir 同名")
+    parser.add_argument("--asset-ripper", help="AssetRipper.GUI.Free 或 .exe 可执行文件路径")
     parser.add_argument("--no-download", action="store_true", help="未找到 AssetRipper 时不自动从官方发布页下载")
-    parser.add_argument("--no-zip", action="store_true", help="仅导出目录，不额外生成 ZIP")
+    parser.add_argument("--no-zip", action="store_true", help="仅导出目录 不额外生成 ZIP")
     parser.add_argument("--overwrite", action="store_true", help="允许覆盖已有输出目录和 ZIP")
     return parser
 
@@ -485,7 +572,7 @@ def main() -> int:
         print(f"❌ {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("\n❌ 已取消。", file=sys.stderr)
+        print("\n❌ 已取消", file=sys.stderr)
         return 130
 
 
