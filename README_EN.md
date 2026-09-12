@@ -11,7 +11,7 @@ Use this tool only with mods and assets that you own, are authorized to modify, 
 | Item | Details |
 | --- | --- |
 | Supported system | Windows 64-bit |
-| Main program | `SFS_Pack_Tool_v22_Embedded_GPL.exe` |
+| Main program | `SFS_Pack_Tool_v2.3_Embedded_GPL_prev.exe` |
 | Embedded exporter | AssetRipper 1.1.4 Windows x64 (forced built-in; no manual selection/download) |
 | Interface languages | Chinese and English |
 | License | GPL-3.0-or-later, with license text and corresponding source materials included |
@@ -34,7 +34,7 @@ The localization workflow reads the JSON container of an SFS `.pack` file and th
 
 ## Download and launch
 
-Download the EXE from the release package and place it in a normal folder where you have write permission, for example `D:\Tools\SFS Pack Tool\`. Start it by double-clicking `SFS_Pack_Tool_v22_Embedded_GPL.exe`.
+Download the EXE from the release package and place it in a normal folder where you have write permission, for example `D:\Tools\SFS Pack Tool\`. Start it by double-clicking `SFS_Pack_Tool_v2.3_Embedded_GPL_prev.exe`.
 
 The EXE is signed with an AFuturestar self-signed certificate. Windows may still show an unknown publisher or SmartScreen warning on systems where that certificate has not been installed as a trusted publisher. Verify the public certificate and SHA-256 signature information provided in the release package before deciding whether to run it.
 
@@ -42,7 +42,7 @@ The embedded AssetRipper ships with the program, so nothing needs to be download
 
 | File or location | Purpose |
 | --- | --- |
-| `SFS_Pack_Tool_v22_Embedded_GPL.exe` | Main program with the embedded runtime |
+| `SFS_Pack_Tool_v2.3_Embedded_GPL_prev.exe` | Main program with the embedded runtime |
 | `AssetRipper-1.1.4/` | Embedded AssetRipper files extracted on first export |
 | `%LOCALAPPDATA%\AFuturestar\SFS-Pack-Tool\` | Fallback extraction location when the EXE folder is not writable |
 | `settings.json` | Stores language, author signature, and path preferences |
