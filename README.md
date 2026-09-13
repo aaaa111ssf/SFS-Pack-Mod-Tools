@@ -1,13 +1,13 @@
 # SFS Pack Mos Tools 是一站式 mod 工具，覆盖：
-• 汉化：提取/写入 mod.pack 的可翻译文本
-• Prefab 导出：用内置 AssetRipper 把 .pack 反编译成 Unity 工程
-• 免挂对齐：自动把 AssetRipper 占位脚本换成 Toolkit 真源码
-• 空壳着色器修复：把导致「黑板」的占位着色器换成真着色器
-• 悬空引用自愈：按同名/同 GUID 修复或补入缺失资产
-• 合并包：只裁剪 Toolkit 没有的新内容，安全并入
-
-## 常见问题
-
+• 汉化：提取/写入 mod.pack 的可翻译文本  
+• Prefab 导出：用内置 AssetRipper 把 .pack 反编译成 Unity 工程  
+• 免挂对齐：自动把 AssetRipper 占位脚本换成 Toolkit 真源码  
+• 空壳着色器修复：把导致「黑板」的占位着色器换成真着色器  
+• 悬空引用自愈：按同名/同 GUID 修复或补入缺失资产  
+• 合并包：只裁剪 Toolkit 没有的新内容，安全并入  
+  
+## 常见问题  
+  
 ### 选择的目录或 Pack 会被删除吗？
 不会。导出只把“新增部件”写进 Toolkit 的 `Assets`，已有部件自动跳过；不清空、不删除、不覆盖 Toolkit 里的既有内容，也不改动输入 Pack 或汉化输出。
 
