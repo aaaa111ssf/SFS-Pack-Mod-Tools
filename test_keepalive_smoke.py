@@ -135,10 +135,109 @@ def test_merge_and_dedupe(tmp: Path, r: Result) -> None:
     for line in logs:
         print("   ", line)
 
-    parts = merge / "Assets" / "Resources" / "Parts"
-    r.check("新增部件归一化到 Resources/Parts", mrep.get("ok", False) and (parts / "Engine.prefab").is_file())
+    sub = str(mrep.get("parts_subfolder") or "")
+    parts = merge / "Assets" / "Resources" / "Parts" / sub
+    r.check("新增部件放进以模组命名的子目录", bool(sub) and mrep.get("ok", False) and (parts / "Engine.prefab").is_file())
     r.check("同名 prefab 已去重（只保留 1 个 Engine）", mrep.get("new_parts") == 2 and mrep.get("duplicate_parts"))
     r.check("合并包内不含 .cs", not any(merge.rglob("*.cs")))
+
+
+def test_stub_shader_fix(tmp: Path, r: Result) -> None:
+    print("\n=== 2b. 空壳着色器（黑板）自动修复 ===")
+    import sfs_script_keep_alive as ka
+
+    toolkit = make_toolkit(tmp / "tk_shader")
+    # Toolkit 真着色器：Additive.shader 里声明 Shader "SFS/Weird"
+    tk_shader = toolkit / "Assets" / "Materials" / "Shaders" / "Additive.shader"
+    write(tk_shader, 'Shader "SFS/Weird" {\n SubShader { Pass { Blend One OneMinusSrcColor } }\n}\n')
+    write(Path(str(tk_shader) + ".meta"), unity_meta("a" * 32))
+
+    project = tmp / "ProjectShader"
+    stub = project / "Assets" / "Shader" / "SFS_Weird.shader"
+    write(stub, '//DummyShaderTextExporter\nShader "SFS/Weird" {\n SubShader { Pass { } }\n}\n')
+    write(Path(str(stub) + ".meta"), unity_meta("b" * 32))
+    write(project / "Assets" / "Parts" / "Glow.mat", "%YAML 1.1\n  m_Shader: {fileID: 4800000, guid: " + "b" * 32 + ", type: 3}\n")
+
+    logs: list[str] = []
+    rep = ka.fix_stub_shaders(project / "Assets", toolkit, log=logs.append, mode="copy")
+    for line in logs:
+        print("   ", line)
+    r.check("copy 模式检出空壳", rep["stubs"] == 1)
+    r.check("copy 模式换成真源码且保留 GUID", "Blend One OneMinusSrcColor" in stub.read_text(encoding="utf-8"))
+    r.check("copy 模式不改材质", ("guid: " + "b" * 32) in (project / "Assets" / "Parts" / "Glow.mat").read_text(encoding="utf-8"))
+
+    logs2: list[str] = []
+    rep2 = ka.fix_stub_shaders(project / "Assets", toolkit, log=logs2.append, mode="remap")
+    for line in logs2:
+        print("   ", line)
+    r.check("remap 模式重写材质到 Toolkit GUID", rep2["refs"] == 1 and ("guid: " + "a" * 32) in (project / "Assets" / "Parts" / "Glow.mat").read_text(encoding="utf-8"))
+    r.check("remap 模式删掉重复着色器", not stub.exists() and rep2["deleted"] == 2)
+    r.check("remap 幂等（再跑一次无空壳）", ka.fix_stub_shaders(project / "Assets", toolkit, log=lambda *_: None, mode="remap")["stubs"] == 0)
+
+
+def test_pack_info_and_strip_guards(tmp: Path, r: Result) -> None:
+    print("\n=== 2c. 包信息部件数 / 剥离兜底 ===")
+    spec = importlib.util.spec_from_file_location("v22_cn_info", BUILD_KIT / "v22-CN.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    def obj(name, pid, father=None, go=None):
+        class _O:
+            type = type("T", (), {"name": name})()
+            path_id = pid
+
+            def read_typetree(self):
+                if father is None:
+                    raise RuntimeError("no typetree")
+                return {
+                    "m_Father": {"m_FileID": 0, "m_PathID": father},
+                    "m_GameObject": {"m_FileID": 0, "m_PathID": go},
+                }
+        return _O()
+
+    # 2 个部件：各有一个根 Transform + 一个子 Transform；另有 6 个 MonoBehaviour
+    objs = [
+        obj("Transform", 10, father=0, go=1),
+        obj("Transform", 11, father=10, go=2),
+        obj("Transform", 20, father=0, go=3),
+        obj("Transform", 21, father=20, go=4),
+    ] + [obj("MonoBehaviour", 100 + i) for i in range(6)] + [obj("GameObject", 1), obj("GameObject", 3)]
+
+    class _Env:
+        def __init__(self, o):
+            self.objects = o
+
+    class _FakeUnityPy:
+        @staticmethod
+        def load(_payload):
+            return _Env(objs)
+
+    module.UnityPy = _FakeUnityPy
+    count = module.count_bundle_parts(b"fake")
+    r.check("部件数按 prefab 根统计=2（不被 MonoBehaviour 撑大）", count == 2)
+
+    # 直接把 i18n key 当文案输出，断言只看 key，不受措辞改动影响
+    translate = lambda key, **kw: key  # noqa: E731
+    src = tmp / "guard.pack"
+    write(src, json.dumps({"AndroidBuild": "AAAA"}))
+    logs: list[str] = []
+    module.strip_pack(str(src), str(tmp / "out.pack"), "WindowsBuild", translate, logs.append)
+    r.check("目标平台不在包里时拒绝剥离", any("strip_no_target" in x for x in logs))
+
+    logs2: list[str] = []
+    module.strip_pack(str(src), str(src), "AndroidBuild", translate, logs2.append)
+    r.check("拒绝把剥离结果写回源 .pack", any("strip_output_is_input" in x for x in logs2))
+    r.check("源 .pack 未被改写", json.loads(src.read_text(encoding="utf-8")) == {"AndroidBuild": "AAAA"})
+
+    logs3: list[str] = []
+    out3 = tmp / "ok.pack"
+    module.strip_pack(str(src), str(out3), "AndroidBuild", translate, logs3.append)
+    r.check("正常平台可以剥离", out3.is_file() and json.loads(out3.read_text(encoding="utf-8")) == {"AndroidBuild": "AAAA"})
+
+    logs4: list[str] = []
+    module.analyze_pack(str(src), translate, logs4.append)
+    r.check("无 CodeAssembly 时如实显示未包含", any("assembly_absent" in x for x in logs4))
 
 
 def test_toolkit_selfcheck(tmp: Path, r: Result) -> None:
@@ -224,6 +323,8 @@ def main() -> int:
         install_fake_unitypy(tmp / "stubmod", ["Part"])
         test_alignment(tmp, r)
         test_merge_and_dedupe(tmp, r)
+        test_stub_shader_fix(tmp, r)
+        test_pack_info_and_strip_guards(tmp, r)
         test_toolkit_selfcheck(tmp, r)
         test_merge_keeps_mod_dll(tmp, r)
         test_install_never_overwrites(tmp, r)

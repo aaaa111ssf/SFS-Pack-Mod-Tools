@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""SFS Pack Tool v2.3."""
+"""SFS Pack Tool v2.3.1."""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ import UnityPy
 import sfs_pack_prefab_export as prefab_exporter
 
 DEFAULT_AUTHOR = "〈A Future star汉化〉"
-VERSION = "2.3.0"
-VERSION_TITLE = "V2.3"
+VERSION = "2.3.1"
+VERSION_TITLE = "V2.3.1"
 EXCLUDE_WORDS = {
     "Color_Gray", "Toggle", "width", "target_state", "tank", "height", "DeployParachute",
     "Landing_Leg_Expanded", "Basic_Parts", "Color_Black", "Color_White", "Flat Smooth 4",
@@ -59,7 +59,7 @@ PLATFORM_NAMES = {
 PLATFORM_LABELS = {name: key for key, name in PLATFORM_NAMES.items()}
 TEXT = {
     "zh": {
-        "window": "SFS Pack Tool V2.3 - Localization & Unity Export-by A Future star",
+        "window": "SFS Pack Tool V2.3.1 - Localization & Unity Export-by A Future star",
         "title": "SFS Pack Tool " + VERSION_TITLE,
         "subtitle": "汉化写入 · Prefab · 贴图 · Unity 工程导出 · 免挂提取",
         "language": "语言",
@@ -86,7 +86,7 @@ TEXT = {
         "select_toolkit": "选择 Toolkit",
         "toolkit_hint": "必填 部件会直接导出并合并进这个 Modding Toolkit 只新增 Toolkit 里没有的部件 已有部件自动跳过 导出会先在临时目录中转 完成后把新部件写进 Toolkit 的 Assets",
         "selected_toolkit": "已选择 Toolkit {path}",
-        "installed_to_toolkit": "✔ 已完成 新增部件已合并进 Toolkit 新增 {new} 个 跳过已有 {skip} 个 拷贝资产 {copy} 个文件 打开 Toolkit 的 Assets/Resources/Parts 即可看到并编辑",
+        "installed_to_toolkit": "✔ 已完成 新增部件已合并进 Toolkit 新增 {new} 个 跳过已有 {skip} 个 拷贝资产 {copy} 个文件 打开 Toolkit 的 Assets/Resources/Parts/{sub} 即可看到并编辑",
         "need_toolkit": "需要 Modding Toolkit 路径",
         "need_toolkit_text": "导出前必须先选择有效的 Modding Toolkit 工程路径\n理由 导出的部件 prefab 引用的游戏脚本需要 Toolkit 提供 不填则部件会断链/无法编辑\n请点击 选择 Toolkit 并选中含 Assets\\Scripts 的 Toolkit 工程根目录",
         "need_toolkit_invalid": "Modding Toolkit 路径无效",
@@ -101,6 +101,8 @@ TEXT = {
         "install_refused": "[安装] [!] 检出 {n} 处 GUID 冲突 已取消写入 Toolkit 请先查看合并包里的 MERGE_README.md 人工核对",
         "install_skipped": "[安装] 已跳过 {n} 个 Toolkit 中已存在的文件 未覆盖任何既有内容",
         "install_failed": "[安装] 写入 Toolkit 失败 {error}",
+        "shader_fixed": "[着色器] 已自动修复 {n} 个 AssetRipper 空壳着色器(零件渲成黑板的根因) 换成 Toolkit 真着色器源码",
+        "shader_unmatched": "[着色器] [!] 还有 {n} 个着色器在 Toolkit 里找不到同名真身 {names}",
         "selected_pack": "已选择源文件 {name}",
         "selected_translation": "已选择翻译文件 {name}",
         "extract_start": "开始提取文本...",
@@ -128,9 +130,12 @@ TEXT = {
         "analyzing": "正在分析包信息...",
         "pack_size": "  包文件 {content} ({size})",
         "assembly": "    CodeAssembly {size}",
+        "assembly_absent": "    CodeAssembly 未包含",
         "build_present": "    {plat} 解压后约 {size} {parts} 个部件",
         "build_absent": "   {plat} 未包含",
         "analyze_done": "✔ 包信息完成 共 {builds} 个平台 {parts} 个部件 解压共 {total}",
+        "strip_no_target": "❌ 该 .pack 里没有 {plat} 平台的数据 无法剥离 请先用 包信息 确认包含哪些平台",
+        "strip_output_is_input": "❌ 剥离输出不能就是源 .pack 会直接覆盖原模组 请另选一个路径",
         "strip_output_set": "剥离输出 {path}",
         "strip_no_pack": "❌ 未选择 mod.pack",
         "strip_no_output": "❌ 未设置输出位置 已在原目录生成",
@@ -142,7 +147,7 @@ TEXT = {
         "strip_fail": "❌ 剥离失败 {error}",
     },
     "en": {
-        "window": "SFS Pack Tool V2.3 - Localization & Unity Export-by A Future star",
+        "window": "SFS Pack Tool V2.3.1 - Localization & Unity Export-by A Future star",
         "title": "SFS Pack Tool " + VERSION_TITLE,
         "subtitle": "Localization · Prefab · Textures · Unity Export · Keep-alive extraction",
         "language": "Language:",
@@ -173,6 +178,8 @@ TEXT = {
         "install_skipped_opt": "[Install] Not enabled; the merge package is ready, copy it in manually per MERGE_README.md.",
         "install_refused": "[Install] [!] {n} GUID collisions found; cancelled writing into the Toolkit. Check MERGE_README.md first.",
         "install_skipped": "[Install] Skipped {n} files that already exist in the Toolkit (nothing overwritten).",
+        "shader_fixed": "[Shader] Auto-fixed {n} AssetRipper stub shaders (the cause of black parts) with real Toolkit shader sources.",
+        "shader_unmatched": "[Shader] [!] {n} shaders have no same-named counterpart in the Toolkit: {names}",
         "install_failed": "[Install] Failed to write into the Toolkit: {error}",
         "selected_pack": "Source selected: {name}",
         "selected_translation": "Translation selected: {name}",
@@ -180,7 +187,7 @@ TEXT = {
         "select_toolkit": "Select Toolkit",
         "toolkit_hint": "Required. Parts are exported and merged straight into this Modding Toolkit (only parts it does not already have are added). Staging is temporary; new parts are written into the Toolkit's Assets.",
         "selected_toolkit": "Toolkit selected: {path}",
-        "installed_to_toolkit": "Done: {new} new parts merged into the Toolkit ({skip} already-present parts skipped, {copy} assets copied). Open Assets/Resources/Parts in the Toolkit to see and edit them.",
+        "installed_to_toolkit": "Done: {new} new parts merged into the Toolkit ({skip} already-present parts skipped, {copy} assets copied). Open Assets/Resources/Parts/{sub} in the Toolkit to see and edit them.",
         "need_toolkit": "Modding Toolkit path required",
         "need_toolkit_text": "You must choose a valid Modding Toolkit project path before exporting.\nReason: the exported part prefabs reference game scripts that come from the Toolkit; without it the parts will be broken/uneditable.\nSelect the Toolkit project root that contains Assets\\Scripts.",
         "need_toolkit_invalid": "Invalid Modding Toolkit path",
@@ -211,9 +218,12 @@ TEXT = {
         "analyzing": "Analyzing pack info...",
         "pack_size": "  Pack file: {content} ({size})",
         "assembly": "    CodeAssembly: {size}",
+        "assembly_absent": "    CodeAssembly: not included",
         "build_present": "    {plat}: ~{size} decompressed, {parts} parts",
         "build_absent": "   {plat}: not included",
         "analyze_done": "✔ Pack info done: {builds} platforms, {parts} parts, ~{total} decompressed",
+        "strip_no_target": "❌ This .pack has no {plat} data to strip. Run Pack info first to see which platforms it contains.",
+        "strip_output_is_input": "❌ Strip output cannot be the source .pack (it would overwrite the original mod). Pick another path.",
         "strip_output_set": "Strip output: {path}",
         "strip_no_pack": "❌ No mod.pack selected",
         "strip_no_output": "❌ No output location set, created in the source folder",
@@ -232,7 +242,7 @@ def resource_path(relative: str) -> Path:
     return base / relative
 
 
-APP_USER_MODEL_ID = "AFuturestar.SFSPackTool.2.3"
+APP_USER_MODEL_ID = "AFuturestar.SFSPackTool.2.3.1"
 _WM_SETICON = 0x0080
 _IMAGE_ICON = 1
 _LR_LOADFROMFILE = 0x00000010
@@ -541,6 +551,43 @@ def decode_build_payload(build_value: object) -> bytes | None:
         return None
 
 
+def count_bundle_parts(payload: bytes) -> int:
+    """数 bundle 里有多少个部件：一个部件 = 一个 prefab 根对象。
+
+    不能拿 MonoBehaviour 计数：一个零件上挂着 ResourceModule、RenderSortingModule
+    等好几个组件，那样数出来会是真实部件数的好几倍。这里数 m_Father 为空的
+    Transform 对应的 GameObject，也就是 prefab 的根。
+    """
+    try:
+        environment = UnityPy.load(payload)
+    except Exception:
+        return 0
+    transforms = [obj for obj in environment.objects if obj.type.name in ("Transform", "RectTransform")]
+    roots: set[object] = set()
+    for obj in transforms:
+        try:
+            tree = obj.read_typetree()
+        except Exception:
+            continue
+        if not isinstance(tree, dict):
+            continue
+        father = tree.get("m_Father")
+        if isinstance(father, dict):
+            if (father.get("m_FileID") or 0) != 0 or (father.get("m_PathID") or 0) != 0:
+                continue  # 有父节点 = 不是根
+        else:
+            continue
+        game_object = tree.get("m_GameObject")
+        if isinstance(game_object, dict) and game_object.get("m_PathID"):
+            roots.add(game_object["m_PathID"])
+        else:
+            roots.add(obj.path_id)
+    if roots:
+        return len(roots)
+    # 拿不到 typetree 时退化成 GameObject 总数，至少不至于报 0
+    return sum(1 for obj in environment.objects if obj.type.name == "GameObject")
+
+
 def analyze_pack(input_file: str, translate, log) -> None:
     """概览 .pack：总体积、各平台 Build 解压体积与部件数量。"""
     if not input_file:
@@ -555,8 +602,13 @@ def analyze_pack(input_file: str, translate, log) -> None:
     content = Path(input_file).stat().st_size
     log(translate("pack_size", content=Path(input_file).name, size=human_size(content)))
     assembly = data.get("CodeAssembly")
-    if isinstance(assembly, str):
-        log(translate("assembly", size=human_size(len(base64.b64decode(assembly, validate=False)))))
+    if isinstance(assembly, str) and assembly.strip():
+        try:
+            log(translate("assembly", size=human_size(len(base64.b64decode(assembly, validate=False)))))
+        except Exception:
+            log(translate("assembly", size=human_size(len(assembly))))
+    else:
+        log(translate("assembly_absent"))
     total = 0
     build_count = 0
     part_total = 0
@@ -567,19 +619,9 @@ def analyze_pack(input_file: str, translate, log) -> None:
             continue
         build_count += 1
         total += len(payload)
-        parts = 0
-        try:
-            environment = UnityPy.load(payload)
-            for obj in environment.objects:
-                if obj.type.name != "MonoBehaviour":
-                    continue
-                try:
-                    parts += 1  # 每个 MonoBehaviour 视为一个部件条目
-                except Exception:
-                    pass
-        except Exception:
-            parts = 0
-        part_total += parts
+        parts = count_bundle_parts(payload)
+        # 各平台装的是同一批部件，取最大值而不是累加，否则“共 N 个部件”会被乘上平台数
+        part_total = max(part_total, parts)
         log(translate("build_present", plat=PLATFORM_NAMES.get(key, key), size=human_size(len(payload)), parts=parts))
     log(translate("analyze_done", builds=build_count, parts=part_total, total=human_size(total)))
 
@@ -597,6 +639,18 @@ def strip_pack(input_file: str, output_file: str, platform_key: str, translate, 
     except Exception as exc:
         log(translate("strip_read_fail", error=exc))
         return
+    # 目标平台压根不在包里时，直接放弃：否则会写出一个只有 CodeAssembly、
+    # 游戏根本加载不了的 .pack，而界面上还显示“剥离完成”。
+    if decode_build_payload(data.get(platform_key)) is None:
+        log(translate("strip_no_target", plat=PLATFORM_NAMES.get(platform_key, platform_key)))
+        return
+    if output_file:
+        try:
+            if Path(output_file).resolve() == Path(input_file).resolve():
+                log(translate("strip_output_is_input"))
+                return
+        except OSError:
+            pass
     log(translate("strip_start"))
     removed = []
     kept = []
@@ -905,6 +959,19 @@ class App:
             except Exception as exc:
                 log(f"[免挂] 对齐失败 不影响已导出的工程 {exc}")
 
+            # 1.5) 自动处理“黑板”：把 AssetRipper 空壳着色器就地换成 Toolkit 真源码
+            try:
+                import sfs_script_keep_alive as keepalive
+                srep = keepalive.fix_stub_shaders(
+                    exported_dir / "Assets", Path(toolkit_dir), log=log, mode="copy"
+                )
+                if srep.get("stubs"):
+                    log(self.t("shader_fixed", n=srep["stubs"]))
+                    if srep.get("unmatched"):
+                        log(self.t("shader_unmatched", n=len(srep["unmatched"]), names=sorted(set(srep["unmatched"]))))
+            except Exception as exc:
+                log(f"[着色器] 处理失败 不影响已导出的工程 {exc}")
+
             # 2) 纯新增合并包
             try:
                 import sfs_script_keep_alive as keepalive
@@ -992,7 +1059,7 @@ class App:
             log(self.t("install_skipped", n=skipped_existing))
         if written_parts:
             log(f"[安装] 已把 {written_parts} 个新增部件并入 Toolkit {tk_assets}")
-            log(self.t("installed_to_toolkit", new=mrep.get("new_parts", 0), skip=mrep.get("skipped_parts", 0), copy=mrep.get("copied_files", 0)))
+            log(self.t("installed_to_toolkit", new=mrep.get("new_parts", 0), skip=mrep.get("skipped_parts", 0), copy=mrep.get("copied_files", 0), sub=mrep.get("parts_subfolder", "")))
         elif written:
             log(f"[安装] 已写入 {written} 个文件 无新增 prefab {tk_assets}")
         else:

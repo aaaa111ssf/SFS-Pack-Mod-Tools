@@ -861,6 +861,180 @@ def _merge_copy_custom_scripts(project_assets: Path, prefabs: list, package_asse
     return stats
 
 
+def _parts_subfolder_name(pack_path: Path) -> str:
+    """新增部件归入的子目录名：取 .pack 文件名，去掉文件系统非法字符。
+
+    直接塞进 Resources/Parts 会把玩家导入的部件和 Toolkit 自带部件混在一起，
+    建一层以模组命名的子目录，方便整包管理、定位与删除。
+    """
+    stem = Path(pack_path).stem if pack_path else ""
+    stem = re.sub(r'[<>:"/\\|?*]', "_", stem).strip().strip(". ")
+    return stem or "Imported"
+
+
+# 材质里着色器引用，形如 m_Shader: {fileID: 4800000, guid: xxxx..., type: 3}
+SHADER_REF_RE = re.compile(
+    r"(m_Shader:\s*\{\s*fileID:\s*\d+\s*,\s*guid:\s*)([0-9a-fA-F]{32})(\s*,\s*type:\s*3\s*\})",
+    re.IGNORECASE,
+)
+# .shader 文件里声明的着色器名，形如 Shader "SFS/Weird"
+SHADER_NAME_RE = re.compile(r'^\s*Shader\s+"([^"]+)"', re.MULTILINE)
+# AssetRipper 反编译不了着色器时写下的占位标记
+DUMMY_SHADER_MARK = "DummyShaderTextExporter"
+# 真着色器一般几 KB；超过这个体积就不当占位版处理，避免误伤 mod 自制着色器
+STUB_MAX_BYTES = 8192
+
+
+def _shader_declared_name(shader: Path) -> str:
+    """读 .shader 里声明的着色器名（如 SFS/Weird）。"""
+    try:
+        m = SHADER_NAME_RE.search(shader.read_text(encoding="utf-8", errors="ignore"))
+    except OSError:
+        return ""
+    return m.group(1) if m else ""
+
+
+def _shader_guid(meta: Path) -> str:
+    try:
+        m = re.search(r"^guid:\s*([0-9a-fA-F]{32})", meta.read_text(encoding="utf-8", errors="ignore"), re.MULTILINE)
+    except OSError:
+        return ""
+    return m.group(1).lower() if m else ""
+
+
+def fix_stub_shaders(
+    project_assets: Path,
+    toolkit_root: Path,
+    log=None,
+    mode: str = "copy",
+) -> dict[str, object]:
+    """把工程里的 AssetRipper 空壳着色器换成 Toolkit 真着色器。
+
+    AssetRipper 反编译不了 SFS 的自定义着色器，会写成带 DummyShaderTextExporter
+    标记的不透明 Standard 占位版 —— 零件因此渲成一整块黑板（**不会报错**）。
+    按 .shader 里声明的 Shader 名匹配 Toolkit 真着色器，两种模式：
+
+    - mode="copy"：把空壳文件的**内容**换成真着色器源码（保留文件名与 GUID），
+      材质一行都不用改，工程自身即可正确渲染 —— **导出工程用这个**。
+    - mode="remap"：把材质 m_Shader 的 GUID 重指向 Toolkit 真着色器并**删掉重复文件**，
+      避免往 Toolkit 里塞进两个同名 Shader —— **合并包用这个**。
+
+    判定为“空壳/重复”的条件：声明的 Shader 名能在 Toolkit 里找到同名真身，
+    且 GUID 与 Toolkit 不同（满足其一即可：带 DummyShaderTextExporter 标记，
+    或文件很短——真着色器一般几 KB，占位版只有几百 B）。
+    已修过的文件再跑一遍是幂等的。
+    """
+    if log is None:
+        log = print
+    result: dict[str, object] = {
+        "stubs": 0,
+        "fixed": 0,
+        "refs": 0,
+        "deleted": 0,
+        "unmatched": [],
+        "map": {},  # 空壳 guid -> Toolkit 真 guid
+    }
+    project_assets = Path(project_assets)
+    toolkit_assets = Path(toolkit_root) / "Assets"
+    if not project_assets.is_dir() or not toolkit_assets.is_dir():
+        return result
+
+    # 1) Toolkit 真着色器：声明名 -> (guid, 源文件)
+    real: dict[str, tuple[str, Path]] = {}
+    for meta in toolkit_assets.rglob("*.shader.meta"):
+        shader = meta.with_suffix("").with_suffix(".shader")
+        if not shader.is_file():
+            continue
+        name = _shader_declared_name(shader)
+        guid = _shader_guid(meta)
+        if name and guid:
+            real[name] = (guid, shader)
+
+    # 2) 工程里的空壳着色器
+    stubs: list[tuple[str, Path, str]] = []  # (声明名, .shader 文件, stub guid)
+    for meta in project_assets.rglob("*.shader.meta"):
+        shader = meta.with_suffix("").with_suffix(".shader")
+        if not shader.is_file():
+            continue
+        try:
+            text = shader.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        name = _shader_declared_name(shader)
+        guid = _shader_guid(meta)
+        if not name or not guid:
+            continue
+        hit = real.get(name)
+        if not hit:
+            # Toolkit 里没同名真身 —— 多半是 mod 自制着色器，原样保留
+            if DUMMY_SHADER_MARK in text:
+                result["unmatched"].append(name)
+            continue
+        real_guid = hit[0]
+        if real_guid == guid:
+            continue  # 本身就是 Toolkit 那份，无需处理
+        # 只认两类：带占位标记的，或短得不像真着色器的
+        if DUMMY_SHADER_MARK not in text and len(text) > STUB_MAX_BYTES:
+            continue
+        result["stubs"] += 1
+        stubs.append((name, shader, guid))
+
+    if not stubs:
+        return result
+
+    result["map"] = {guid: real[name][0] for name, _, guid in stubs}
+
+    if mode == "remap":
+        # 3a) 材质 GUID 重指向 Toolkit 真着色器
+        stub_to_real = {guid: real[name][0] for name, _, guid in stubs}
+
+        def repl(mm: re.Match) -> str:
+            new = stub_to_real.get(mm.group(2).lower())
+            if not new:
+                return mm.group(0)
+            result["refs"] += 1
+            return mm.group(1) + new + mm.group(3)
+
+        for pattern in ("*.mat", "*.prefab", "*.asset", "*.unity"):
+            for f in project_assets.rglob(pattern):
+                try:
+                    text = f.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                if "m_Shader:" not in text:
+                    continue
+                new_text = SHADER_REF_RE.sub(repl, text)
+                if new_text != text:
+                    f.write_text(new_text, encoding="utf-8")
+        # 4) 删掉空壳，别把占位版带进 Toolkit
+        for _, shader, _ in stubs:
+            for p in (shader, Path(str(shader) + ".meta")):
+                try:
+                    if p.is_file():
+                        p.unlink()
+                        result["deleted"] += 1
+                except OSError:
+                    pass
+    else:
+        # 3b) 就地换成真着色器源码，保留文件名与 GUID
+        for name, shader, _ in stubs:
+            src = real[name][1]
+            try:
+                shader.write_bytes(src.read_bytes())
+                result["fixed"] += 1
+            except OSError:
+                continue
+
+    result["fixed"] = result["fixed"] or len(stubs)
+    extra = ""
+    if mode == "remap":
+        extra = " 重写材质引用 {} 处 删除空壳文件 {} 个".format(result["refs"], result["deleted"])
+    log("[着色器] 空壳 {} 个 已换成 Toolkit 真着色器 {} 个{}".format(result["stubs"], len(stubs), extra))
+    if result["unmatched"]:
+        log(f"[着色器] [!] Toolkit 里找不到同名真着色器 {sorted(set(result['unmatched']))}")
+    return result
+
+
 def build_merge_package(
     project_dir: Path,
     pack_path: Path,
@@ -871,7 +1045,8 @@ def build_merge_package(
     """裁剪出只含“Toolkit 没有的新内容”的合并包。
 
     产物不含 .cs/.dll（脚本由 Toolkit 提供，避免 CS0263），prefab 的 m_Script
-    已指向 Toolkit 真脚本；新增部件归一化到 Assets/Resources/Parts，并做 GUID 冲突预检。
+    已指向 Toolkit 真脚本；新增部件归一化到 Assets/Resources/Parts/<模组名>/，
+    自动替换 AssetRipper 空壳着色器（黑板根因），并做 GUID 冲突预检。
     """
     if log is None:
         log = print
@@ -924,6 +1099,15 @@ def build_merge_package(
             total_rewrite += n
     log(f"[合并] 已重写 {total_rewrite} 处脚本引用")
 
+    # 2.5) 自动处理“黑板”：AssetRipper 反编译不了 SFS 自定义着色器，会留下带
+    #      DummyShaderTextExporter 的占位 shader，零件因此渲成纯黑板且**不报错**。
+    #      先用 copy 模式就地换真源码（保留 GUID，导出工程自身即可正确渲染），
+    #      放在依赖收集之前，这样拷进包里的就是修好的着色器。
+    try:
+        fix_stub_shaders(project_assets, toolkit_root, log=log, mode="copy")
+    except Exception as e:  # 着色器修复失败不应阻断合并
+        log(f"[合并] [!] 空壳着色器处理失败 {e}")
+
     # 3) 挑出新增部件并按文件名去重：归一化到 Resources/Parts 时同名会互相覆盖
     new_prefabs: list[Path] = []
     skipped: list[Path] = []
@@ -957,7 +1141,10 @@ def build_merge_package(
         except ValueError:
             continue
         copied += copy_with_meta(src, package_assets / rel)
-    parts_out = package_assets / "Resources" / "Parts"
+    # 新建一层以 .pack 命名的子目录，避免玩家部件和 Toolkit 自带部件混在一起
+    sub_name = _parts_subfolder_name(pack_path)
+    parts_out = package_assets / "Resources" / "Parts" / sub_name
+    parts_out.mkdir(parents=True, exist_ok=True)
     new_names = []
     for prefab in new_prefabs:
         dest = parts_out / prefab.name
@@ -974,6 +1161,14 @@ def build_merge_package(
         log(f"[合并] 已带上 mod 程序集 {mod_custom['dll']} 个(DLL) 自定义脚本引用据此解析")
     if mod_custom["cs"]:
         log(f"[合并] 已带上 ModCode 自定义脚本 {mod_custom['cs']} 个 自定义脚本引用据此解析")
+
+    # 4.6) 合并包里改成 remap：Toolkit 本身就有真着色器，材质重指向它的 GUID
+    #      并删掉重复文件，避免 Toolkit 的 Shader 下拉里出现两个同名 SFS/Weird。
+    shader_fix: dict[str, object] = {"stubs": 0, "fixed": 0, "refs": 0, "deleted": 0, "unmatched": [], "map": {}}
+    try:
+        shader_fix = fix_stub_shaders(package_assets, toolkit_root, log=log, mode="remap")
+    except Exception as e:  # 着色器修复失败不应阻断合并
+        log(f"[合并] [!] 合并包着色器重指向失败 {e}")
 
     # 5) GUID 冲突预检：包内资产 GUID 与 Toolkit 已有资产求交
     toolkit_guid_index = index_asset_guids(Path(toolkit_root) / "Assets")
@@ -1015,10 +1210,22 @@ def build_merge_package(
             "- 本包**不含脚本** 脚本由你的 Modding Toolkit 提供 因此**不会重复 不会触发 CS0263**\n"
         )
     readme_lines += [
-        "- 用法 把 `Assets/` 里的内容拷进 Toolkit 工程 `Assets/` 新增部件统一放在 `Assets/Resources/Parts` 保留全部 `.meta`\n",
+        "- 用法 把 `Assets/` 里的内容拷进 Toolkit 工程 `Assets/` 保留全部 `.meta`\n",
+        f"- 新增部件统一放在 `Assets/Resources/Parts/{sub_name}/` 子目录(以模组名命名) 与 Toolkit 自带部件分开\n",
         "- 新增部件 prefab 的脚本引用已指向 Toolkit 真实脚本 GUID 导入后即能正常解析 可编辑\n",
         "\n---\n",
     ]
+    if shader_fix["stubs"]:
+        readme_lines.append(
+            "- **已自动修复黑板** 检出 AssetRipper 空壳着色器 {} 个 重写材质引用 {} 处"
+            " 删除空壳 {} 个 材质现指向 Toolkit 真着色器\n".format(
+                shader_fix["stubs"], shader_fix["refs"], shader_fix["deleted"]
+            )
+        )
+        if shader_fix["unmatched"]:
+            readme_lines.append(
+                f"- [!] 仍有 {len(shader_fix['unmatched'])} 个着色器在 Toolkit 里找不到同名真身 {sorted(set(shader_fix['unmatched']))}\n"
+            )
     if collisions:
         readme_lines.append(f"- **GUID 冲突 {len(collisions)} 处** 请人工核对后再拷入\n")
     if duplicate_parts:
@@ -1042,6 +1249,10 @@ def build_merge_package(
             "guid_collisions": collisions,
             "mod_custom_dll": mod_custom["dll"],
             "mod_custom_cs": mod_custom["cs"],
+            "shader_stubs": shader_fix["stubs"],
+            "shader_refs": shader_fix["refs"],
+            "shader_deleted": shader_fix["deleted"],
+            "parts_subfolder": sub_name,
         }
     )
     return report
