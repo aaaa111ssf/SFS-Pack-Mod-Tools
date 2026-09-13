@@ -885,21 +885,49 @@ DUMMY_SHADER_MARK = "DummyShaderTextExporter"
 STUB_MAX_BYTES = 8192
 
 
+def _read_text(path: Path) -> str:
+    """读文本资产。Unity 导出的 .shader/.meta 常带 UTF-8 BOM，这里统一去掉，
+    否则 `^\\s*Shader "SFS/xxx"` 这类行首正则会全部失配（真着色器被误判成"没找到真身"）。"""
+    return path.read_text(encoding="utf-8", errors="ignore").lstrip("\ufeff")
+
+
 def _shader_declared_name(shader: Path) -> str:
     """读 .shader 里声明的着色器名（如 SFS/Weird）。"""
     try:
-        m = SHADER_NAME_RE.search(shader.read_text(encoding="utf-8", errors="ignore"))
+        m = SHADER_NAME_RE.search(_read_text(shader))
     except OSError:
         return ""
     return m.group(1) if m else ""
 
 
-def _shader_guid(meta: Path) -> str:
+def _meta_guid(meta: Path) -> str:
+    """读 .meta 里的 guid（小写）。"""
     try:
-        m = re.search(r"^guid:\s*([0-9a-fA-F]{32})", meta.read_text(encoding="utf-8", errors="ignore"), re.MULTILINE)
+        m = re.search(r"^guid:\s*([0-9a-fA-F]{32})", _read_text(meta), re.MULTILINE)
     except OSError:
         return ""
     return m.group(1).lower() if m else ""
+
+
+def _is_stub_shader(text: str) -> bool:
+    """判断一份 .shader 是不是 AssetRipper 的占位空壳。
+
+    判定必须保守——认错了就会把 mod 自制的真着色器删掉。两条判据：
+    1. 带 `//DummyShaderTextExporter` 标记（AssetRipper 会原样写下，铁证）；
+    2. 老版 AssetRipper 不写标记，但会生成一模一样的 Standard 表面着色器样板
+       （`#pragma surface surf Standard` + `SurfaceOutputStandard` 的 surf 函数），
+       且体积小得离谱。再叠加"必须是 SFS/ 开头"这一条，把 mod 自制着色器排除掉。
+    """
+    if DUMMY_SHADER_MARK in text:
+        return True
+    if len(text) > STUB_MAX_BYTES:
+        return False
+    return (
+        "#pragma surface surf Standard" in text
+        and "SurfaceOutputStandard" in text
+        and SHADER_NAME_RE.search(text) is not None
+        and 'Shader "SFS/' in text
+    )
 
 
 def fix_stub_shaders(
@@ -907,6 +935,7 @@ def fix_stub_shaders(
     toolkit_root: Path,
     log=None,
     mode: str = "copy",
+    backup_dir: Path | str | None = None,
 ) -> dict[str, object]:
     """把工程里的 AssetRipper 空壳着色器换成 Toolkit 真着色器。
 
@@ -919,10 +948,12 @@ def fix_stub_shaders(
     - mode="remap"：把材质 m_Shader 的 GUID 重指向 Toolkit 真着色器并**删掉重复文件**，
       避免往 Toolkit 里塞进两个同名 Shader —— **合并包用这个**。
 
-    判定为“空壳/重复”的条件：声明的 Shader 名能在 Toolkit 里找到同名真身，
-    且 GUID 与 Toolkit 不同（满足其一即可：带 DummyShaderTextExporter 标记，
-    或文件很短——真着色器一般几 KB，占位版只有几百 B）。
+    判定为“空壳”的条件（见 _is_stub_shader，保守优先）：声明的 Shader 名能在
+    Toolkit 里找到同名真身、GUID 与 Toolkit 不同，且自身是占位版（带
+    DummyShaderTextExporter 标记，或是 AssetRipper 那套 Standard 表面着色器样板）。
     已修过的文件再跑一遍是幂等的。
+
+    backup_dir 给定时，remap 模式下被删的空壳会先挪进该目录（保留相对路径）。
     """
     if log is None:
         log = print
@@ -938,17 +969,34 @@ def fix_stub_shaders(
     toolkit_assets = Path(toolkit_root) / "Assets"
     if not project_assets.is_dir() or not toolkit_assets.is_dir():
         return result
+    backup_dir = Path(backup_dir) if backup_dir else None
 
     # 1) Toolkit 真着色器：声明名 -> (guid, 源文件)
+    # 分两桶收集：真身优先，空壳只当兜底。清理 Toolkit 自身时两棵树是同一棵，
+    # 若混在一桶里按遍历顺序覆盖，残留的空壳会把真身顶掉，材质反而被指到空壳上。
     real: dict[str, tuple[str, Path]] = {}
+    real_stub: dict[str, tuple[str, Path]] = {}
+
     for meta in toolkit_assets.rglob("*.shader.meta"):
         shader = meta.with_suffix("").with_suffix(".shader")
         if not shader.is_file():
             continue
+        try:
+            text = _read_text(shader)
+        except OSError:
+            continue
         name = _shader_declared_name(shader)
-        guid = _shader_guid(meta)
-        if name and guid:
+        guid = _meta_guid(meta)
+        if not name or not guid:
+            continue
+        # 同名真身已收录时，别让后来的空壳把它顶掉
+        if _is_stub_shader(text):
+            real_stub.setdefault(name, (guid, shader))
+        elif name not in real:
             real[name] = (guid, shader)
+
+    def _lookup(name: str) -> tuple[str, Path] | None:
+        return real.get(name) or real_stub.get(name)
 
     # 2) 工程里的空壳着色器
     stubs: list[tuple[str, Path, str]] = []  # (声明名, .shader 文件, stub guid)
@@ -957,14 +1005,14 @@ def fix_stub_shaders(
         if not shader.is_file():
             continue
         try:
-            text = shader.read_text(encoding="utf-8", errors="ignore")
+            text = _read_text(shader)
         except OSError:
             continue
         name = _shader_declared_name(shader)
-        guid = _shader_guid(meta)
+        guid = _meta_guid(meta)
         if not name or not guid:
             continue
-        hit = real.get(name)
+        hit = _lookup(name)
         if not hit:
             # Toolkit 里没同名真身 —— 多半是 mod 自制着色器，原样保留
             if DUMMY_SHADER_MARK in text:
@@ -973,20 +1021,24 @@ def fix_stub_shaders(
         real_guid = hit[0]
         if real_guid == guid:
             continue  # 本身就是 Toolkit 那份，无需处理
-        # 只认两类：带占位标记的，或短得不像真着色器的
-        if DUMMY_SHADER_MARK not in text and len(text) > STUB_MAX_BYTES:
-            continue
+        if not _is_stub_shader(text):
+            # 有内容的真着色器 —— copy 模式下绝不能覆盖。
+            # remap 模式另当别论：只要它和 Toolkit 那份**逐字节等价**，就说明是
+            # 同一份着色器的另一份拷贝（例如上一轮 copy 模式刚把它换成真源码），
+            # 留着会在 Toolkit 里出现两个同名 Shader，必须去重。
+            if not (mode == "remap" and _assets_equivalent(shader, hit[1])):
+                continue
         result["stubs"] += 1
-        stubs.append((name, shader, guid))
+        stubs.append((name, shader, guid, hit))
 
     if not stubs:
         return result
 
-    result["map"] = {guid: real[name][0] for name, _, guid in stubs}
+    result["map"] = {guid: hit[0] for _, _, guid, hit in stubs}
 
     if mode == "remap":
         # 3a) 材质 GUID 重指向 Toolkit 真着色器
-        stub_to_real = {guid: real[name][0] for name, _, guid in stubs}
+        stub_to_real = {guid: hit[0] for _, _, guid, hit in stubs}
 
         def repl(mm: re.Match) -> str:
             new = stub_to_real.get(mm.group(2).lower())
@@ -1006,8 +1058,28 @@ def fix_stub_shaders(
                 new_text = SHADER_REF_RE.sub(repl, text)
                 if new_text != text:
                     f.write_text(new_text, encoding="utf-8")
+                    # 顺手把内部 m_Name 改成与文件名一致，消掉 Odin 的
+                    # "main object name should match the asset filename" 警告
+                    if f.suffix.lower() in (".mat", ".asset", ".prefab"):
+                        sync_asset_name(f)
         # 4) 删掉空壳，别把占位版带进 Toolkit
-        for _, shader, _ in stubs:
+        for name, shader, guid, hit in stubs:
+            if backup_dir:
+                try:
+                    rel = shader.relative_to(project_assets)
+                except ValueError:
+                    rel = Path(shader.name)
+                for p in (shader, Path(str(shader) + ".meta")):
+                    if not p.is_file():
+                        continue
+                    dst = backup_dir / rel.parent / (rel.name if p is shader else rel.name + ".meta")
+                    try:
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        if dst.exists():
+                            dst.unlink()
+                        shutil.copy2(p, dst)
+                    except OSError:
+                        pass
             for p in (shader, Path(str(shader) + ".meta")):
                 try:
                     if p.is_file():
@@ -1017,8 +1089,8 @@ def fix_stub_shaders(
                     pass
     else:
         # 3b) 就地换成真着色器源码，保留文件名与 GUID
-        for name, shader, _ in stubs:
-            src = real[name][1]
+        for name, shader, guid, hit in stubs:
+            src = hit[1]
             try:
                 shader.write_bytes(src.read_bytes())
                 result["fixed"] += 1
@@ -1033,6 +1105,507 @@ def fix_stub_shaders(
     if result["unmatched"]:
         log(f"[着色器] [!] Toolkit 里找不到同名真着色器 {sorted(set(result['unmatched']))}")
     return result
+
+
+# 资产内部的对象名（m_Name: xxx）。第一个捕获组是**行首缩进**，替换时必须原样保留：
+# Unity YAML 里 m_Name 属于 `Material:` / `GameObject:` 这个映射，缩进一丢，Unity 就
+# 读不到它 → 主对象名为空 → 材质/资产损坏（Odin 报 "Material {} has a missing shader"）。
+M_NAME_RE = re.compile(r"^([ \t]*)m_Name:[ \t]*(.*)$", re.MULTILINE)
+
+
+def sync_asset_name(asset: Path) -> bool:
+    """把资产内部的 m_Name 改成与文件名一致，并保证它仍然带 YAML 缩进。
+
+    改名保留的副本（如 `Engine Olders 1v_Weird.mat`）内部还写着原来的
+    `m_Name: Weird`，Odin 就会一直刷 "The main object name should match the
+    asset filename"。全文件恰好一处 m_Name 时才动手，避免误改 prefab 子物体名。
+
+    **顶格（无缩进）的 m_Name 一定有问题**，必须补回缩进：Unity 的 YAML 里
+    m_Name 属于 `Material:` / `GameObject:` 这个映射，一旦顶格，Unity 就读不到它，
+    主对象名变空 → 整个材质损坏（Odin 报 "Material {} has a missing shader"、
+    Renderer 绑不上材质导致 `RenderSortingModule.SetDepth` NRE）。所以这种情况
+    即使名字已经对了也要改回缩进形式。
+    """
+    asset = Path(asset)
+    try:
+        text = _read_text(asset)
+    except OSError:
+        return False
+    hits = M_NAME_RE.findall(text)
+    if len(hits) != 1:
+        return False
+    indent, value = hits[0][0], hits[0][1].strip()
+    if value == asset.stem and indent:
+        return False  # 名字已对且缩进正常，不动
+    indent = indent or "  "  # 顶格的补回 Unity 惯用的两空格
+    new_text = M_NAME_RE.sub(lambda m: f"{indent}m_Name: {asset.stem}", text, count=1)
+    try:
+        asset.write_text(new_text, encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def fix_asset_name_mismatches(assets_dir: Path, log=None) -> int:
+    """把资产内部 m_Name 与文件名对齐（仅对全文件恰好一处 m_Name 的文件动手）。
+
+    早期导入流程对同名资源加了前缀改名（如 `Engine Olders 1v_Weird.mat`），
+    但没改内部 m_Name，于是 Odin 一直刷 "The main object name should match the
+    asset filename"。返回修正了多少个文件。
+    """
+    if log is None:
+        log = print
+    assets_dir = Path(assets_dir)
+    n = 0
+    for suf in (".mat", ".asset", ".prefab"):
+        for f in assets_dir.rglob("*" + suf):
+            try:
+                if sync_asset_name(f):
+                    n += 1
+            except OSError:
+                continue
+    if n:
+        log(f"[命名] 已把 {n} 个资产的 m_Name 对齐到文件名")
+    return n
+
+
+def repair_toolkit_shaders(toolkit_root: Path, log=None, backup: bool = True) -> dict[str, object]:
+    """清理 Toolkit 里**已经存在**的 AssetRipper 空壳着色器（历史遗留修复）。
+
+    早期版本的导入流程没做着色器对齐，把 `Shader/SFS_*.shader` 这类占位版连同
+    材质一起写进了 Toolkit；材质 m_Shader 指向它们 → 零件渲成黑板，而且
+    Unity 不会报任何错。这里按 Shader 名把引用重指向 `Materials/Shaders/` 下的
+    真身，再删掉空壳（默认先备份到 `<Toolkit>/_PackToolBackup/<时间>_stubshaders/`）。
+    同时把导出流程改名留下的 m_Name 与文件名不一致也一并修掉。
+    """
+    import time
+
+    if log is None:
+        log = print
+    toolkit_root = Path(toolkit_root)
+    backup_dir = None
+    if backup:
+        backup_dir = toolkit_root / "_PackToolBackup" / (time.strftime("%Y%m%d_%H%M%S") + "_stubshaders")
+    rep = fix_stub_shaders(
+        toolkit_root / "Assets", toolkit_root, log=log, mode="remap", backup_dir=backup_dir
+    )
+    rep["names_fixed"] = fix_asset_name_mismatches(toolkit_root / "Assets", log=log)
+    rep["backup_dir"] = str(backup_dir) if backup_dir else ""
+    return rep
+
+
+# 资产文件里的 guid 引用（{fileID:.., guid:.., type:..} 或裸的 guid: 行）
+GUID_FIELD_RE = re.compile(r"guid:\s*([0-9a-fA-F]{32})")
+# 参与引用重写的文本资产后缀
+REWRITE_SUFFIXES = {".prefab", ".mat", ".asset", ".unity", ".controller", ".anim", ".playable"}
+# Unity 内置空引用占位 GUID（如内置着色器 Sprites/Default 用 fileID 456.. + 此 GUID 存）。
+# 它不是工程内资产、也不需要 .meta，引用它属正常 —— 扫描时一律视为"已解析"，避免误报悬空。
+UNITY_BUILTIN_NULL_GUIDS = {"0000000000000000f000000000000000"}
+
+
+def _norm_asset_text(text: str) -> str:
+    """把 guid 值统一打码、去掉空白差异，用于判断两份资产是不是「同一个东西的副本」。
+
+    注意必须连**内联引用**里的 guid 一起打码：AssetRipper 导出的那份副本，
+    与 Toolkit 里原版的差别恰恰就在 `{fileID: 2800000, guid: xxx, type: 3}`
+    这种内联引用上，而不是独立的 guid 行（那是 .meta 才有的）。
+    """
+    text = GUID_FIELD_RE.sub("guid: <G>", text.replace("\r\n", "\n"))
+    out = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("guid: <G>"):
+            continue
+        out.append(stripped)
+    return "\n".join(out)
+
+
+def _assets_equivalent(a: Path, b: Path) -> bool:
+    """两份资产是否等价：二进制直接比字节；文本比"去 guid 去空白"后的内容。"""
+    try:
+        raw_a = a.read_bytes()
+        raw_b = b.read_bytes()
+    except OSError:
+        return False
+    if raw_a == raw_b:
+        return True
+    try:
+        text_a = raw_a.decode("utf-8")
+        text_b = raw_b.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return _norm_asset_text(text_a) == _norm_asset_text(text_b)
+
+
+def count_dangling_refs(text: str, known_guids: set) -> int:
+    """数一份资产文本里有多少处 guid 引用在 known_guids 里找不到（即悬空引用）。"""
+    return sum(1 for g in GUID_FIELD_RE.findall(text)
+               if g.lower() not in known_guids and g.lower() not in UNITY_BUILTIN_NULL_GUIDS)
+
+
+def remap_toolkit_duplicates(
+    package_assets: Path,
+    toolkit_assets: Path,
+    log=None,
+    rename_tag: str = "mod",
+) -> dict[str, object]:
+    """把包内"与 Toolkit 同路径"的原版资源重定向到 Toolkit 已有的那一份。
+
+    AssetRipper 导出的是一个**平行 GUID 世界**：mod 复用的 SFS 原版贴图 / 材质 /
+    音效 / 配置资源，AssetRipper 会给每份都单独导出一个副本并重新生成 GUID，
+    副本内部又引用平行世界里的其它 GUID。直接把这种包贴进 Toolkit 会踩两个坑：
+
+    1. 同名文件撞上 Toolkit 已有资源，按"不覆盖"策略被跳过，prefab 仍指着包内
+       那份 GUID → 引用悬空（Odin 报 missing，渲染脚本取不到材质直接 NRE）；
+    2. 就算强行拷进去，副本内部的引用仍指向 Toolkit 里不存在的 GUID，照样悬空。
+
+    所以这里以 `Assets` 下的**相对路径**作为资产身份：凡是 Toolkit 里已有同路径
+    资产，就把包内对它的引用全部改写成 Toolkit 那份的 GUID，并删掉包内副本。
+    只有内容和 Toolkit 不一致（说明 mod 确实改过它）时才保留副本，并改名加前缀，
+    既不丢 mod 的改动，也不跟 Toolkit 的同名文件撞车。
+    """
+    if log is None:
+        log = print
+    result: dict[str, object] = {
+        "dupes": 0,
+        "redirected": 0,
+        "kept_diff": [],
+        "refs": 0,
+        "removed": 0,
+        "empty": False,
+    }
+    package_assets = Path(package_assets)
+    toolkit_assets = Path(toolkit_assets)
+    if not package_assets.is_dir() or not toolkit_assets.is_dir():
+        result["empty"] = True
+        return result
+
+    # 1) Toolkit 侧索引：相对路径(小写) -> (guid, 资产文件)
+    tk_by_rel: dict[str, tuple[str, Path]] = {}
+    # 1b) 同名索引：文件基名(小写) -> (guid, 资产文件)
+    #     有些 mod 把原版材质放到与 Toolkit 不同的子目录（如 Materials/ 而非 Material/），
+    #     相对路径对不上就不会被当作副本，prefab 引用随之悬空（即本次 Engine Olders 1v
+    #     火焰材质 6880fbc9/5f4709db 悬空的根因）。同名即视为同一份，下面的等价性判断
+    #     会兜底：等价才重定向+删副本，内容不同则保留 mod 版并改名，不会误伤。
+    tk_by_name: dict[str, tuple[str, Path]] = {}
+    for meta in toolkit_assets.rglob("*.meta"):
+        asset = meta.with_suffix("")
+        if not asset.is_file():
+            continue
+        guid = _meta_guid(meta)
+        if not guid:
+            continue
+        try:
+            rel = asset.relative_to(toolkit_assets).as_posix().lower()
+        except ValueError:
+            continue
+        tk_by_rel[rel] = (guid, asset)
+        tk_by_name.setdefault(asset.stem.lower(), (guid, asset))
+
+    # 2) 找出包内的同名副本，决定重定向还是改名保留
+    redirect: dict[str, str] = {}
+    drop: set[Path] = set()
+    rename: list[tuple[Path, Path]] = []
+    for meta in package_assets.rglob("*.meta"):
+        asset = meta.with_suffix("")
+        if not asset.is_file():
+            continue
+        pkg_guid = _meta_guid(meta)
+        if not pkg_guid:
+            continue
+        try:
+            rel = asset.relative_to(package_assets).as_posix().lower()
+        except ValueError:
+            continue
+        hit = tk_by_rel.get(rel) or tk_by_name.get(asset.stem.lower())
+        if hit is None:
+            continue
+        result["dupes"] += 1
+        tk_guid, tk_asset = hit
+        if tk_guid == pkg_guid or _assets_equivalent(asset, tk_asset):
+            # 同一个东西的副本：引用改指 Toolkit，包内这份删掉
+            redirect[pkg_guid] = tk_guid
+            drop.add(asset)
+            result["redirected"] += 1
+        else:
+            # 内容确有差异：保留 mod 的，改名避开 Toolkit 同名文件（GUID 不变，引用照旧）
+            new_asset = asset.with_name(f"{rename_tag}_{asset.name}")
+            rename.append((asset, new_asset))
+            result["kept_diff"].append(asset.relative_to(package_assets).as_posix())
+
+    if rename:
+        for old, new in rename:
+            try:
+                new.parent.mkdir(parents=True, exist_ok=True)
+                old.rename(new)
+                old_meta, new_meta = Path(str(old) + ".meta"), Path(str(new) + ".meta")
+                if old_meta.is_file():
+                    old_meta.rename(new_meta)
+                # 文件改名了，内部的 m_Name 也要跟着改，否则 Odin 刷名字不匹配警告
+                if new.suffix.lower() in (".mat", ".asset", ".prefab"):
+                    sync_asset_name(new)
+            except OSError:
+                continue
+
+    if not redirect:
+        if result["dupes"]:
+            log("[对齐] 与 Toolkit 同名资源 {} 个 全部保留了 mod 版本".format(result["dupes"]))
+        return result
+
+    # 3) 把包内所有文本资产里对"待删副本"的引用改写成 Toolkit 的 GUID
+    def repl(m: re.Match) -> str:
+        new = redirect.get(m.group(1).lower())
+        if not new:
+            return m.group(0)
+        result["refs"] += 1
+        return "guid: " + new
+
+    for f in package_assets.rglob("*"):
+        if not f.is_file() or f.suffix.lower() not in REWRITE_SUFFIXES:
+            continue
+        if f in drop:
+            continue
+        try:
+            text = f.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if "guid:" not in text:
+            continue
+        new_text = GUID_FIELD_RE.sub(repl, text)
+        if new_text != text:
+            try:
+                f.write_text(new_text, encoding="utf-8")
+            except OSError:
+                continue
+
+    # 4) 删掉包内的重复副本（含 .meta），由 Toolkit 那份顶上
+    for asset in drop:
+        for p in (asset, Path(str(asset) + ".meta")):
+            try:
+                if p.is_file():
+                    p.unlink()
+                    result["removed"] += 1
+            except OSError:
+                pass
+
+    log("[对齐] 与 Toolkit 同名的原版资源 {} 个 已改指 Toolkit 那份(重写引用 {} 处 移除副本 {} 个)".format(
+        result["redirected"], result["refs"], result["removed"]))
+    if result["kept_diff"]:
+        log("[对齐] [!] {} 个同名资源内容与 Toolkit 不同 已保留 mod 版本并改名 {}".format(
+            len(result["kept_diff"]), result["kept_diff"][:8]))
+    return result
+
+
+def repair_toolkit_dangling_refs(
+    toolkit_root: Path,
+    package_assets: Path | str | None = None,
+    log=None,
+    backup: bool = True,
+) -> dict[str, object]:
+    """扫描并自愈 Toolkit 里**已经存在**的悬空引用（部件指向不存在的 GUID）。
+
+    适用场景：用早期/其它流程并已导入的 Toolkit，里面某些部件（最常见是火焰/
+    贴图/音效类材质）仍引用着 mod 自己的 GUID，而这些 GUID 在 Toolkit 里不存在
+    —— 表现就是 Odin 一片 Missing(Material) / 渲染脚本取不到材质直接 NRE。
+
+    自愈策略（需提供原始 mod 工程目录 `package_assets`，即 AssetRipper 导出的那份）：
+    1. 以 Toolkit 现有全部 .meta 的 GUID 为"已知集"，扫出 Toolkit 文本资产里所有
+       指向未知 GUID 的引用（即悬空引用）；
+    2. 对每个悬空 GUID，去 `package_assets` 里找同名/同 GUID 的原版资产：
+       - 原版与 Toolkit 同名资产**等价** → 把 Toolkit 里的引用改指 Toolkit 那份
+         （去重，不重复拷入）；
+       - 原版与 Toolkit 同名资产**不同**（mod 真改过）→ 把原版**补入** Toolkit
+         （保留原 GUID，引用自然就通了）；
+       - Toolkit 里**没有**同名资产 → 同样把原版补入 Toolkit（保留原 GUID）。
+    3. 实在找不到原版（真孤儿 GUID）→ 写进清单交人工处理。
+
+    不提供 `package_assets` 时只做**扫描 + 清单**，绝不瞎改（避免把好的引用改坏）。
+    默认先备份到 `<Toolkit>/_PackToolBackup/<时间>_dangling/`。
+    """
+    import time
+    import shutil
+
+    if log is None:
+        log = print
+    toolkit_root = Path(toolkit_root)
+    tk_assets = toolkit_root / "Assets"
+    if not tk_assets.is_dir():
+        return {"error": "Toolkit 缺少 Assets 目录", "dangling": 0, "redirected": 0,
+                "imported": 0, "unresolved": 0, "manifest": ""}
+
+    # 1) Toolkit 侧索引：guid -> 资产、文件名(小写) -> guid
+    tk_known: set[str] = set()
+    tk_guid_to_asset: dict[str, Path] = {}
+    tk_name_to_guid: dict[str, str] = {}
+    for meta in tk_assets.rglob("*.meta"):
+        g = _meta_guid(meta)
+        if not g:
+            continue
+        tk_known.add(g)
+        asset = meta.with_suffix("")
+        tk_guid_to_asset[g] = asset
+        if asset.is_file():
+            tk_name_to_guid.setdefault(asset.stem.lower(), g)
+
+    # 包侧索引（可选；需提供原始 mod 工程目录才能真正自愈）
+    pkg_present = False
+    pkg_guid_to_asset: dict[str, Path] = {}
+    pkg_name_to_guid: dict[str, str] = {}
+    if package_assets:
+        pkg = Path(package_assets)
+        if pkg.is_dir() and (pkg / "Assets").is_dir():
+            pkg = pkg / "Assets"
+        if pkg.is_dir():
+            pkg_present = True
+            for meta in pkg.rglob("*.meta"):
+                g = _meta_guid(meta)
+                if not g:
+                    continue
+                asset = meta.with_suffix("")
+                pkg_guid_to_asset[g] = asset
+                if asset.is_file():
+                    pkg_name_to_guid.setdefault(asset.stem.lower(), g)
+
+    # 2) 扫出 Toolkit 里所有指向"非 Toolkit GUID"的悬空引用
+    dangling: list[tuple[Path, str]] = []
+    for f in tk_assets.rglob("*"):
+        if not f.is_file() or f.suffix.lower() not in REWRITE_SUFFIXES:
+            continue
+        try:
+            text = f.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if "guid:" not in text:
+            continue
+        for g in GUID_FIELD_RE.findall(text):
+            gl = g.lower()
+            if gl in UNITY_BUILTIN_NULL_GUIDS:
+                continue  # Unity 内置占位引用，正常，不算悬空
+            if gl not in tk_known:
+                dangling.append((f, gl))
+
+    total = len(dangling)
+    if total == 0:
+        log("[悬空] 未发现悬空引用 Toolkit 已是干净的")
+        return {"dangling": 0, "redirected": 0, "imported": 0, "unresolved": 0, "manifest": ""}
+
+    # 3) 对去重后的每个悬空 GUID 制定重定向/补入方案
+    redirect: dict[str, str] = {}
+    import_plan: list[Path] = []
+    imported_names: list[str] = []
+    unresolved: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for f, g in dangling:
+        if g in seen:
+            continue
+        seen.add(g)
+        if not pkg_present or g not in pkg_guid_to_asset:
+            unresolved.append((str(f.relative_to(toolkit_root)), g))
+            continue
+        pkg_asset = pkg_guid_to_asset[g]
+        name = pkg_asset.stem.lower()
+        tk_g = tk_name_to_guid.get(name)
+        if tk_g and tk_g != g:
+            tk_asset = tk_guid_to_asset.get(tk_g)
+            if tk_asset and _assets_equivalent(pkg_asset, tk_asset):
+                # 同名等价：直接指向 Toolkit 那份，不重复拷入
+                redirect[g] = tk_g
+            else:
+                # 同名但内容不同（mod 真改过）：补入原版，保留原 GUID
+                import_plan.append(pkg_asset)
+        else:
+            # Toolkit 没有同名资产：补入原版，保留原 GUID
+            import_plan.append(pkg_asset)
+
+    # 4) 把 Toolkit 里对"待重定向 GUID"的引用改写为 Toolkit 的 GUID
+    redirected = 0
+    if redirect:
+        redir_lower = {k.lower(): v for k, v in redirect.items()}
+        counter = [0]
+        def repl(m: "re.Match") -> str:
+            new = redir_lower.get(m.group(1).lower())
+            if new:
+                counter[0] += 1
+                return "guid: " + new
+            return m.group(0)
+        for f in tk_assets.rglob("*"):
+            if not f.is_file() or f.suffix.lower() not in REWRITE_SUFFIXES:
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "guid:" not in text:
+                continue
+            new_text = GUID_FIELD_RE.sub(repl, text)
+            if new_text != text:
+                try:
+                    f.write_text(new_text, encoding="utf-8")
+                except OSError:
+                    pass
+        redirected = counter[0]
+
+    # 5) 补入 Toolkit 缺失的原版资产（连同 .meta 一起，保留原 GUID）
+    imported = 0
+    if import_plan and pkg_present:
+        for pkg_asset in import_plan:
+            try:
+                rel = pkg_asset.relative_to(pkg)
+            except ValueError:
+                continue
+            dest = tk_assets / rel
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                copied = False
+                if not dest.exists():
+                    shutil.copy2(pkg_asset, dest)
+                    imported_names.append(pkg_asset.name)
+                    imported += 1
+                    copied = True
+                pkg_meta = Path(str(pkg_asset) + ".meta")
+                if pkg_meta.is_file():
+                    dest_meta = Path(str(dest) + ".meta")
+                    if not dest_meta.exists():
+                        shutil.copy2(pkg_meta, dest_meta)
+                        copied = True
+                if not copied:
+                    # 目标已存在（通常同 GUID 同名），跳过即可
+                    pass
+            except OSError:
+                continue
+
+    # 6) 孤儿 GUID 写清单
+    manifest = ""
+    if unresolved:
+        backup_dir = toolkit_root / "_PackToolBackup" / (time.strftime("%Y%m%d_%H%M%S") + "_dangling")
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            manifest = str(backup_dir / "dangling_manifest.txt")
+            with open(manifest, "w", encoding="utf-8") as fh:
+                fh.write("# 悬空引用清单（共 {} 处，无法自动修复）\n".format(len(unresolved)))
+                fh.write("# 格式：文件 | 悬空 GUID\n")
+                for fp, g in unresolved:
+                    fh.write("{} | {}\n".format(fp, g))
+        except OSError:
+            manifest = ""
+
+    log("[悬空] 扫描到 {} 处悬空引用".format(total))
+    if redirected:
+        log("[悬空] 已按同名重定向 {} 处".format(redirected))
+    if imported:
+        log("[悬空] 已补入 Toolkit 缺失资产 {} 个：{}".format(imported, imported_names[:8]))
+    if unresolved:
+        log("[悬空] 无法自动修复 {} 处 清单见 {}".format(len(unresolved), manifest))
+    if not pkg_present:
+        log("[悬空] 未提供原始 mod 工程目录 仅完成扫描+清单 如需自动修复请填写原始 mod 工程目录")
+
+    return {
+        "dangling": total,
+        "redirected": redirected,
+        "imported": imported,
+        "unresolved": len(unresolved),
+        "manifest": manifest,
+    }
 
 
 def build_merge_package(
@@ -1170,6 +1743,21 @@ def build_merge_package(
     except Exception as e:  # 着色器修复失败不应阻断合并
         log(f"[合并] [!] 合并包着色器重指向失败 {e}")
 
+    # 4.7) 关键一步：AssetRipper 导出的是「平行 GUID 世界」，mod 复用的原版贴图/
+    #      材质/音效/配置在 Toolkit 里本来就有，但 GUID 是 Toolkit 自己那一套。
+    #      不按相对路径把包内引用对齐到 Toolkit，零件贴进去后这些引用必定悬空
+    #      —— Odin 一片 missing，RenderSortingModule 这类脚本还会因此直接 NRE。
+    dup_fix: dict[str, object] = {"dupes": 0, "redirected": 0, "refs": 0, "removed": 0, "kept_diff": [], "empty": True}
+    try:
+        dup_fix = remap_toolkit_duplicates(
+            package_assets, Path(toolkit_root) / "Assets", log=log, rename_tag=sub_name
+        )
+    except Exception as e:
+        log(f"[合并] [!] 同名资源对齐失败 {e}")
+
+    # 4.8) 重映射会删掉重复副本，重新按包内实际文件数统计，README 里的数字才准
+    copied = sum(1 for p in package_assets.rglob("*") if p.is_file())
+
     # 5) GUID 冲突预检：包内资产 GUID 与 Toolkit 已有资产求交
     toolkit_guid_index = index_asset_guids(Path(toolkit_root) / "Assets")
     collisions: list[str] = []
@@ -1226,6 +1814,19 @@ def build_merge_package(
             readme_lines.append(
                 f"- [!] 仍有 {len(shader_fix['unmatched'])} 个着色器在 Toolkit 里找不到同名真身 {sorted(set(shader_fix['unmatched']))}\n"
             )
+    if dup_fix["redirected"]:
+        readme_lines.append(
+            "- **已对齐原版资源** {} 个与 Toolkit 同名的贴图/材质/音效/配置 已改指 Toolkit 那一份"
+            "(重写引用 {} 处 移除重复副本 {} 个) 这是零件引用不再悬空的关键\n".format(
+                dup_fix["redirected"], dup_fix["refs"], dup_fix["removed"]
+            )
+        )
+    if dup_fix["kept_diff"]:
+        readme_lines.append(
+            "- [!] {} 个同名资源内容与 Toolkit 不同 已保留 mod 版本并加 `{}_` 前缀改名 {}".format(
+                len(dup_fix["kept_diff"]), sub_name, dup_fix["kept_diff"][:8]
+            ) + "\n"
+        )
     if collisions:
         readme_lines.append(f"- **GUID 冲突 {len(collisions)} 处** 请人工核对后再拷入\n")
     if duplicate_parts:
@@ -1253,6 +1854,10 @@ def build_merge_package(
             "shader_refs": shader_fix["refs"],
             "shader_deleted": shader_fix["deleted"],
             "parts_subfolder": sub_name,
+            "dup_redirected": dup_fix["redirected"],
+            "dup_refs": dup_fix["refs"],
+            "dup_removed": dup_fix["removed"],
+            "dup_kept_diff": dup_fix["kept_diff"],
         }
     )
     return report

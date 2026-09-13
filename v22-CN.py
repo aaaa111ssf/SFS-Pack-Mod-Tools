@@ -13,6 +13,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 import tkinter as tk
@@ -103,6 +104,22 @@ TEXT = {
         "install_failed": "[安装] 写入 Toolkit 失败 {error}",
         "shader_fixed": "[着色器] 已自动修复 {n} 个 AssetRipper 空壳着色器(零件渲成黑板的根因) 换成 Toolkit 真着色器源码",
         "shader_unmatched": "[着色器] [!] 还有 {n} 个着色器在 Toolkit 里找不到同名真身 {names}",
+        "install_repaired": "[安装] 修复 {name} 悬空引用 {before} 处 -> {after} 处",
+        "install_repair_done": "[安装] 已修复 {n} 个引用悬空的既有资产 原文件已备份到 {path}",
+        "repair_toolkit_btn": "修复 Toolkit 空壳着色器·悬空引用",
+        "repair_start": "开始清理 Toolkit 里残留的 AssetRipper 空壳着色器(零件渲成黑板的根因)...",
+        "repair_done": "[修复] 已删除 {stubs} 个空壳着色器 重写 {refs} 处材质引用 同步 {names} 个资产名 备份于 {backup}",
+        "repair_none": "[修复] 没发现空壳着色器 Toolkit 已是干净的",
+        "repair_need_tk": "请先填写 Modding Toolkit 路径",
+        "repair_dangling_none": "[悬空] 未发现悬空引用 Toolkit 已是干净的",
+        "repair_dangling_scan": "[悬空] 扫描到 {n} 处悬空引用",
+        "repair_dangling_redirected": "[悬空] 已按同名重定向 {n} 处",
+        "repair_dangling_imported": "[悬空] 已补入 Toolkit 缺失资产 {m} 个：{names}",
+        "repair_dangling_unresolved": "[悬空] 无法自动修复 {n} 处 清单见 {path}",
+        "repair_dangling_nopkg": "[悬空] 未提供原始 mod 工程目录 仅扫描+清单 如需自动修复请填写原始 mod 工程目录",
+        "repair_dangling_clean": "[修复] 悬空引用：重定向 {redirected} 处 补入 {imported} 个 未解决 {unresolved} 处",
+        "package_dir_label": "原始 mod 工程目录(可选 用于按名修复悬空引用)",
+        "select_package": "选择",
         "selected_pack": "已选择源文件 {name}",
         "selected_translation": "已选择翻译文件 {name}",
         "extract_start": "开始提取文本...",
@@ -180,6 +197,22 @@ TEXT = {
         "install_skipped": "[Install] Skipped {n} files that already exist in the Toolkit (nothing overwritten).",
         "shader_fixed": "[Shader] Auto-fixed {n} AssetRipper stub shaders (the cause of black parts) with real Toolkit shader sources.",
         "shader_unmatched": "[Shader] [!] {n} shaders have no same-named counterpart in the Toolkit: {names}",
+        "install_repaired": "[Install] Repaired {name}: dangling refs {before} -> {after}",
+        "install_repair_done": "[Install] Repaired {n} existing assets with dangling refs; originals backed up to {path}",
+        "repair_toolkit_btn": "Repair Toolkit stub shaders (black parts)",
+        "repair_start": "Cleaning leftover AssetRipper stub shaders in the Toolkit (the cause of black parts)...",
+        "repair_done": "[Repair] Deleted {stubs} stub shaders, rewrote {refs} material refs, synced {names} asset names. Backup at {backup}",
+        "repair_none": "[Repair] No stub shaders found; the Toolkit is clean.",
+        "repair_need_tk": "Please set the Modding Toolkit path first.",
+        "repair_dangling_none": "[Dangling] No dangling references found; the Toolkit is clean.",
+        "repair_dangling_scan": "[Dangling] Scanned {n} dangling references",
+        "repair_dangling_redirected": "[Dangling] Redirected {n} references by name",
+        "repair_dangling_imported": "[Dangling] Imported {m} missing assets into the Toolkit: {names}",
+        "repair_dangling_unresolved": "[Dangling] {n} references could not be auto-fixed; manifest at {path}",
+        "repair_dangling_nopkg": "[Dangling] No original mod project dir provided; scan+manifest only. To auto-fix, fill the original mod project dir.",
+        "repair_dangling_clean": "[Repair] Dangling refs: redirected {redirected}, imported {imported}, unresolved {unresolved}",
+        "package_dir_label": "Original mod project dir (optional; for name-based dangling repair)",
+        "select_package": "Select",
         "install_failed": "[Install] Failed to write into the Toolkit: {error}",
         "selected_pack": "Source selected: {name}",
         "selected_translation": "Translation selected: {name}",
@@ -688,6 +721,7 @@ class App:
         self.logs: list[str] = []
         self.author_var = tk.StringVar(value=self.settings.get("author", DEFAULT_AUTHOR))
         self.toolkit_dir_var = tk.StringVar(value=self.settings.get("toolkit_dir", ""))
+        self.package_dir_var = tk.StringVar(value=self.settings.get("package_dir", ""))
         self.extract_output_var = tk.StringVar(value=self.settings.get("extract_output", ""))
         self.strip_output_var = tk.StringVar(value=self.settings.get("strip_output", ""))
         self.platform_var = tk.StringVar(value=PLATFORM_NAMES.get(self.settings.get("strip_platform", "WindowsBuild"), "Windows"))
@@ -748,6 +782,12 @@ class App:
                        command=self.save_user_settings, anchor="w", justify="left").grid(row=3, column=1, sticky="w", padx=5, pady=(7, 0))
         self.export_btn = tk.Button(export, text=self.t("export"), command=self.start_export, bg="#e6f7ff", width=14)
         self.export_btn.grid(row=3, column=2, padx=3, pady=(7, 0))
+        tk.Button(export, text=self.t("repair_toolkit_btn"), command=self.start_repair_toolkit, bg="#fff3bf", width=24)\
+            .grid(row=4, column=1, columnspan=2, sticky="w", padx=5, pady=(7, 0))
+        tk.Label(export, text=self.t("package_dir_label")).grid(row=5, column=0, sticky="w", pady=(7, 0))
+        tk.Entry(export, textvariable=self.package_dir_var).grid(row=5, column=1, sticky="ew", padx=5, pady=(7, 0))
+        tk.Button(export, text=self.t("select_package"), command=self.pick_package_dir, width=14)\
+            .grid(row=5, column=2, padx=3, pady=(7, 0))
         export.columnconfigure(1, weight=1)
 
         strip = tk.LabelFrame(self.root, text=self.t("strip_frame"), padx=8, pady=8)
@@ -785,6 +825,7 @@ class App:
             "language": self.locale,
             "author": self.author_var.get(),
             "toolkit_dir": self.toolkit_dir_var.get().strip(),
+            "package_dir": self.package_dir_var.get().strip(),
             "extract_output": self.extract_output_var.get().strip(),
             "strip_output": self.strip_output_var.get().strip(),
             "strip_platform": PLATFORM_LABELS.get(self.platform_var.get(), "WindowsBuild"),
@@ -852,6 +893,12 @@ class App:
                 path = str(resolved)
             self.toolkit_dir_var.set(path)
             self.save_user_settings()
+
+    def pick_package_dir(self) -> None:
+        path = filedialog.askdirectory(title=self.t("package_dir_label"))
+        if path:
+            self.package_dir_var.set(path)
+            self.save_user_settings()
             self.log(self.t("selected_toolkit", path=path))
 
     def pick_strip_output(self) -> None:
@@ -912,18 +959,60 @@ class App:
         if getattr(self, "export_btn", None):
             self.export_btn.configure(state="disabled", text=self.t("export_running"))
 
-        def _done() -> None:
-            self._export_busy = False
-            if getattr(self, "export_btn", None):
-                self.export_btn.configure(state="normal", text=self.t("export"))
-
         def _run(log) -> None:
             try:
                 self.export_project(log, output, toolkit_dir, bool(self.install_var.get()))
             finally:
                 self.root.after(0, _done)
 
+        def _done() -> None:
+            self._export_busy = False
+            if getattr(self, "export_btn", None):
+                self.export_btn.configure(state="normal", text=self.t("export"))
+
         self.run_async(_run)
+
+    def start_repair_toolkit(self) -> None:
+        """按钮：清理 Toolkit 里残留的 AssetRipper 空壳着色器（黑板根因）。"""
+        toolkit_dir = self.toolkit_dir_var.get().strip()
+        if not toolkit_dir or not Path(toolkit_dir).is_dir():
+            messagebox.showerror(self.t("need_toolkit"), self.t("repair_need_tk"))
+            return
+        resolved = resolve_toolkit_root(toolkit_dir)
+        if resolved is None:
+            messagebox.showerror(self.t("need_toolkit_invalid"), self.t("need_toolkit_invalid_text"))
+            return
+        package_dir = self.package_dir_var.get().strip()
+        self.run_async(lambda log: self.repair_toolkit(log, str(resolved), package_dir))
+
+    def repair_toolkit(self, log, toolkit_dir: str, package_dir: str = "") -> None:
+        log(self.t("repair_start"))
+        try:
+            import sfs_script_keep_alive as keepalive
+            keepalive.log = log
+            rep = keepalive.repair_toolkit_shaders(Path(toolkit_dir), log=log, backup=True)
+        except Exception as exc:
+            log(self.t("processing_failed", error=exc))
+            rep = {}
+        if rep.get("stubs", 0) or rep.get("names_fixed", 0):
+            log(self.t("repair_done", stubs=rep.get("stubs", 0), refs=rep.get("refs", 0),
+                       names=rep.get("names_fixed", 0), backup=rep.get("backup_dir", "")))
+        else:
+            log(self.t("repair_none"))
+
+        # 悬空引用自愈扫描（提供原始 mod 工程目录可自动修复，否则只扫描+清单）
+        try:
+            drep = keepalive.repair_toolkit_dangling_refs(
+                Path(toolkit_dir), package_assets=package_dir or None, log=log, backup=True)
+        except Exception as exc:
+            log(self.t("processing_failed", error=exc))
+            return
+        if drep.get("dangling", 0) == 0:
+            log(self.t("repair_dangling_none"))
+        else:
+            log(self.t("repair_dangling_clean", redirected=drep.get("redirected", 0),
+                       imported=drep.get("imported", 0), unresolved=drep.get("unresolved", 0)))
+
 
     def export_project(self, log, output: str, toolkit_dir: str = "", install: bool = False) -> None:
         log(self.t("export_start"))
@@ -990,8 +1079,11 @@ class App:
             except Exception as exc:
                 log(f"[合并] 生成失败 不影响已导出的工程 {exc}")
 
-            # 3) 可选：并入 Toolkit。默认关闭；开启时也绝不覆盖已有文件。
-            if mrep.get("ok") and mrep.get("new_parts"):
+            # 3) 可选：并入 Toolkit。默认关闭；开启时绝不覆盖内容正常的既有文件，
+            #    但会对"已存在却引用悬空"的资产做修复性覆盖（先备份）。
+            #    注意这里不能再用 new_parts 做门槛：部件全都已存在时 new_parts=0，
+            #    而那份已存在的 prefab 恰恰可能正是引用悬空、需要被修好的那个。
+            if mrep.get("ok"):
                 if not install:
                     log(self.t("install_skipped_opt"))
                 else:
@@ -1029,7 +1121,13 @@ class App:
         log(self.t("export_done"))
 
     def install_into_toolkit(self, log, toolkit_dir: Path, package_dir: Path, mrep: dict[str, object]) -> None:
-        """把合并包并入 Toolkit：只写新文件，绝不覆盖既有内容；有 GUID 冲突则直接放弃。"""
+        """把合并包并入 Toolkit。
+
+        默认只写新文件、绝不覆盖既有内容。唯一的例外是「悬空引用修复」：Toolkit 里
+        已存在同名资产、但它的 guid 引用大量悬空，而包里这份已对齐好的版本悬空更少时，
+        先把原文件备份到 `<Toolkit>/_PackToolBackup/<时间戳>/`，再覆盖。
+        判据是「悬空引用数必须下降」，所以只会往好的方向改，不会把好的改坏。
+        """
         collisions = mrep.get("guid_collisions") or []
         if collisions:
             log(self.t("install_refused", n=len(collisions)))
@@ -1038,13 +1136,50 @@ class App:
         tk_assets = toolkit_dir / "Assets"
         if not pkg_assets.is_dir():
             return
-        written = written_parts = skipped_existing = 0
+
+        # 悬空判断用的已知 GUID 全集：Toolkit 现有的 + 包内带的
+        import sfs_script_keep_alive as keepalive
+        known: set[str] = set()
+        for meta in tk_assets.rglob("*.meta"):
+            g = keepalive._meta_guid(meta)
+            if g:
+                known.add(g)
+        for meta in pkg_assets.rglob("*.meta"):
+            g = keepalive._meta_guid(meta)
+            if g:
+                known.add(g)
+
+        repairable_suffixes = {".prefab", ".mat", ".asset"}
+        written = written_parts = skipped_existing = repaired = 0
+        backup_root = toolkit_dir / "_PackToolBackup" / time.strftime("%Y%m%d_%H%M%S")
         try:
             for src in sorted(pkg_assets.rglob("*")):
                 if not src.is_file():
                     continue
                 dest = tk_assets / src.relative_to(pkg_assets)
-                if dest.exists():  # 关键：已存在就跳过，不覆盖用户的任何文件
+                if dest.exists():
+                    # 已存在就跳过——除非这份是"引用悬空"的坏资产，而包里这份更好
+                    if dest.is_file() and src.suffix.lower() in repairable_suffixes:
+                        try:
+                            old_text = dest.read_text(encoding="utf-8", errors="ignore")
+                            new_text = src.read_text(encoding="utf-8", errors="ignore")
+                        except OSError:
+                            skipped_existing += 1
+                            continue
+                        old_bad = keepalive.count_dangling_refs(old_text, known)
+                        new_bad = keepalive.count_dangling_refs(new_text, known)
+                        if old_bad and new_bad < old_bad:
+                            try:
+                                saved = backup_root / dest.relative_to(tk_assets)
+                                saved.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(dest, saved)
+                            except OSError:
+                                pass  # 备份失败就不动它，宁可漏修不可误覆盖
+                            else:
+                                shutil.copy2(src, dest)
+                                repaired += 1
+                                log(self.t("install_repaired", name=dest.name, before=old_bad, after=new_bad))
+                                continue
                     skipped_existing += 1
                     continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1055,6 +1190,8 @@ class App:
         except OSError as exc:
             log(self.t("install_failed", error=exc))
             return
+        if repaired:
+            log(self.t("install_repair_done", n=repaired, path=backup_root))
         if skipped_existing:
             log(self.t("install_skipped", n=skipped_existing))
         if written_parts:
@@ -1062,7 +1199,7 @@ class App:
             log(self.t("installed_to_toolkit", new=mrep.get("new_parts", 0), skip=mrep.get("skipped_parts", 0), copy=mrep.get("copied_files", 0), sub=mrep.get("parts_subfolder", "")))
         elif written:
             log(f"[安装] 已写入 {written} 个文件 无新增 prefab {tk_assets}")
-        else:
+        elif not repaired:
             log("[安装] 没有新文件需要写入 Toolkit")
 
 
