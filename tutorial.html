@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SFS Pack Tool 使用教程</title>
+<style>
+  :root { --bg:#ffffff; --card:#ffffff; --fg:#1a1a1a; --muted:#8a8a8a; --accent:#000000; --line:#e5e5e5; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Microsoft YaHei","Segoe UI",system-ui,sans-serif; background:var(--bg); color:var(--fg); line-height:1.7; }
+  header { padding:32px 20px 20px; text-align:center; border-bottom:1px solid var(--line); }
+  header h1 { margin:0 0 6px; font-size:26px; letter-spacing:1px; }
+  header p { margin:0; color:var(--muted); }
+  main { max-width:880px; margin:0 auto; padding:24px 18px 60px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:4px; padding:18px 22px; margin:16px 0; }
+  h2 { color:var(--fg); font-size:19px; margin:0 0 10px; padding-bottom:8px; border-bottom:1px solid var(--line); }
+  h3 { margin:14px 0 6px; font-size:15px; color:#4a4a4a; }
+  ol, ul { margin:6px 0 6px 20px; padding:0; }
+  li { margin:4px 0; }
+  code { background:#f5f5f5; border:1px solid var(--line); padding:1px 6px; border-radius:3px; font-size:13px; color:#333333; }
+  .en { color:var(--muted); font-size:13px; margin-top:2px; }
+  .step { display:inline-block; min-width:22px; height:22px; line-height:22px; text-align:center; background:var(--accent); color:#ffffff; border-radius:50%; font-weight:700; margin-right:8px; }
+  footer { text-align:center; color:var(--muted); font-size:13px; padding:24px; border-top:1px solid var(--line); }
+  a { color:#333333; text-decoration:underline; text-underline-offset:2px; }
+  a:hover { color:#000000; }
+  b { color:#000000; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SFS Pack Tool 使用教程</h1>
+  <p>SFS Pack Tool V2.3.1 · 汉化 / Prefab 导出 / 贴图 / Unity 工程导出 · 作者 A Future star</p>
+</header>
+<main>
+
+  <section>
+    <h2>① 准备工作 / Before you start</h2>
+    <ul>
+      <li>准备你的 <code>mod.pack</code>（AssetRipper 导出的原始素材包）。</li>
+      <li>准备一份官方 <b>Modding Toolkit</b> 工程（含 <code>Assets/Scripts</code>）。</li>
+      <li class="en">Prepare your mod.pack and an official Modding Toolkit project (must contain Assets/Scripts).</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>② 汉化文本 / Localization</h2>
+    <ol>
+      <li><span class="step">1</span>在「输入文件」区点 <b>选择原始 mod.pack</b>。</li>
+      <li><span class="step">2</span>点 <b>提取待翻译文本</b>，得到 <code>texts_to_translate.json</code>。</li>
+      <li><span class="step">3</span>翻译该 JSON 后，点 <b>选择翻译 JSON</b>，再点 <b>写入汉化并生成 Pack</b>。</li>
+      <li class="en">Pick the source pack, extract translatable text, translate the JSON, then write it back to produce a localized pack.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>③ 一键导出 Unity 工程 / One-click Unity export</h2>
+    <ol>
+      <li><span class="step">1</span>点 <b>选择工程目录</b>（合并按钮）：先选 <b>Modding Toolkit</b> 根目录，再选 <b>原始 mod 工程目录</b>（可选，用于按名修复悬空引用）。</li>
+      <li><span class="step">2</span>勾选「导出后并入 Toolkit」（可选，默认只生成合并包、不覆盖既有文件）。</li>
+      <li><span class="step">3</span>点 <b>一键导出工程</b>。工具会：反编译 prefab → 免挂对齐脚本 → 修复空壳着色器（黑板根因）→ 生成合并包 → <b>自动清理 Toolkit 空壳着色器与悬空引用</b> → 导出后自检。</li>
+      <li class="en">One button now also runs the Toolkit stub-shader &amp; dangling-reference repair, so black parts are fixed automatically.</li>
+    </ol>
+    <h3>关于「空壳着色器 / 悬空引用」</h3>
+    <ul>
+      <li><b>空壳着色器</b>：AssetRipper 把 SFS 自定义着色器反编译成不透明占位版，零件会被渲成一整块黑板（且不报错）。工具按 Shader 名换成 Toolkit 真源码。</li>
+      <li><b>悬空引用</b>：部件引用了 Toolkit 里不存在的 GUID（常见于火焰/贴图/音效材质），表现为 Odin 一片 Missing，渲染脚本取不到材质直接 NRE。提供原始 mod 工程目录可自动补入/重定向。</li>
+      <li class="en">Stub shaders render parts as a black board; dangling refs cause Missing materials &amp; NREs. Both are auto-fixed during export.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>④ 合并包 / Merge package</h2>
+    <ul>
+      <li>合并包只裁剪 <b>Toolkit 没有</b> 的新内容，归一化到 <code>Assets/Resources/Parts/&lt;模组名&gt;/</code>。</li>
+      <li>已存在同名部件自动跳过；GUID 冲突会列出并取消写入，请按 <code>MERGE_README.md</code> 人工核对。</li>
+      <li class="en">The merge package only adds what the Toolkit lacks; collisions are refused with a manifest.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>⑤ 剥离 / Strip</h2>
+    <ul>
+      <li>点 <b>包信息</b> 查看包含哪些平台与部件，再点 <b>剥离到目标平台</b> 大幅减小 .pack 体积。</li>
+      <li class="en">Use Pack info then Strip to a target platform to shrink the .pack.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>⑥ 关于作者 / About</h2>
+    <ul>
+      <li>作者：<b>A Future star</b>（汉化与维护）。</li>
+      <li>QQ 群：<b>923038827</b> · <a href="https://qm.qq.com/q/3NAzgXluEo" target="_blank" rel="noopener">点击加入【𝔸𝔽𝕊 ℍ𝕦𝕓】</a></li>
+      <li class="en">Author: A Future star. QQ group 923038827.</li>
+    </ul>
+  </section>
+
+</main>
+<footer>SFS Pack Tool · 由 A Future star 汉化维护 · 教程仅作快速上手参考</footer>
+</body>
+</html>

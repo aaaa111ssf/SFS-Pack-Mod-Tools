@@ -16,6 +16,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+import webbrowser
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 
@@ -105,6 +106,9 @@ TEXT = {
         "shader_fixed": "[着色器] 已自动修复 {n} 个 AssetRipper 空壳着色器(零件渲成黑板的根因) 换成 Toolkit 真着色器源码",
         "shader_unmatched": "[着色器] [!] 还有 {n} 个着色器在 Toolkit 里找不到同名真身 {names}",
         "install_repaired": "[安装] 修复 {name} 悬空引用 {before} 处 -> {after} 处",
+        "install_wrote_parts": "[安装] 已把 {n} 个新增部件并入 Toolkit {path}",
+        "install_wrote_files": "[安装] 已写入 {n} 个文件 无新增 prefab {path}",
+        "install_nothing": "[安装] 没有新文件需要写入 Toolkit",
         "install_repair_done": "[安装] 已修复 {n} 个引用悬空的既有资产 原文件已备份到 {path}",
         "repair_toolkit_btn": "修复 Toolkit 空壳着色器·悬空引用",
         "repair_start": "开始清理 Toolkit 里残留的 AssetRipper 空壳着色器(零件渲成黑板的根因)...",
@@ -162,6 +166,31 @@ TEXT = {
         "strip_keep": "  保留 {plat}",
         "strip_done": "✔ 剥离完成 {out} {size}",
         "strip_fail": "❌ 剥离失败 {error}",
+        "pick_projects": "选择工程目录 (Toolkit + 原始mod)",
+        "menu_tutorial": "教程",
+        "menu_tutorial_open": "打开使用教程 (HTML)",
+        "menu_author": "关于作者",
+        "menu_author_open": "作者与 QQ 群",
+        "menu_about": "关于应用",
+        "menu_about_open": "工具介绍 / 实现原理",
+        "about_app_title": "关于 SFS Pack Tool",
+        "about_author_title": "关于作者",
+        "about_close": "关闭",
+        "link_qq": "点击加入 QQ 群【𝔸𝔽𝕊 ℍ𝕦𝕓】",
+        "qq_hint": "QQ 群号 923038827",
+        "log_align_done": "[免挂] 完成 重写 {rewritten} 个 prefab/asset {refs} 处脚本引用",
+        "log_align_skip": "[免挂] 未执行 {error}",
+        "log_align_fail": "[免挂] 对齐失败 不影响已导出的工程 {exc}",
+        "log_shader_fail_export": "[着色器] 处理失败 不影响已导出的工程 {exc}",
+        "log_merge_done": "[合并] 纯新增合并包 {pkg} 新增部件 {new} 跳过已有 {skip} 拷贝资产 {copy}",
+        "log_merge_none": "[合并] 未生成 {error}",
+        "log_merge_fail": "[合并] 生成失败 不影响已导出的工程 {exc}",
+        "log_verify_hit": "[校验] 导出工程脚本引用 命中 {hit}/{total} 缺失 {miss}",
+        "log_verify_missing": "[校验] [!] {n} 个 prefab 存在缺失脚本引用 {files}",
+        "log_verify_fail": "[校验] 自检脚本引用失败 不影响导出结果 {exc}",
+        "tutorial_missing": "未找到 tutorial.html 请确认它与本程序在同一目录",
+        "about_app_text": "SFS Pack Tool 是一站式 mod 工具，覆盖：\n• 汉化：提取/写入 mod.pack 的可翻译文本\n• Prefab 导出：用内置 AssetRipper 把 .pack 反编译成 Unity 工程\n• 免挂对齐：自动把 AssetRipper 占位脚本换成 Toolkit 真源码\n• 空壳着色器修复：把导致「黑板」的占位着色器换成真着色器\n• 悬空引用自愈：按同名/同 GUID 修复或补入缺失资产\n• 合并包：只裁剪 Toolkit 没有的新内容，安全并入\n\n实现上：导出时在系统临时目录中转，优先 copy 模式换真着色器源码(保留 GUID)，再按类名重写脚本 GUID 映射，最后做 GUID 冲突预检。",
+        "about_author_text": "作者：A Future star(汉化)\n本工具由 A Future star 汉化并维护，用于降低 SFS mod 制作门槛。\n如有问题或建议，欢迎加入 QQ 群交流。",
     },
     "en": {
         "window": "SFS Pack Tool V2.3.1 - Localization & Unity Export-by A Future star",
@@ -198,6 +227,9 @@ TEXT = {
         "shader_fixed": "[Shader] Auto-fixed {n} AssetRipper stub shaders (the cause of black parts) with real Toolkit shader sources.",
         "shader_unmatched": "[Shader] [!] {n} shaders have no same-named counterpart in the Toolkit: {names}",
         "install_repaired": "[Install] Repaired {name}: dangling refs {before} -> {after}",
+        "install_wrote_parts": "[Install] Merged {n} new parts into the Toolkit at {path}",
+        "install_wrote_files": "[Install] Wrote {n} files (no new prefabs) at {path}",
+        "install_nothing": "[Install] No new files need to be written to the Toolkit",
         "install_repair_done": "[Install] Repaired {n} existing assets with dangling refs; originals backed up to {path}",
         "repair_toolkit_btn": "Repair Toolkit stub shaders (black parts)",
         "repair_start": "Cleaning leftover AssetRipper stub shaders in the Toolkit (the cause of black parts)...",
@@ -266,8 +298,152 @@ TEXT = {
         "strip_keep": "  Kept {plat}",
         "strip_done": "✔ Strip done: {out} ({size})",
         "strip_fail": "❌ Strip failed: {error}",
+        "pick_projects": "Select project dirs (Toolkit + original mod)",
+        "tutorial_missing": "tutorial.html not found; make sure it sits next to this program",
+        "menu_tutorial": "Tutorial",
+        "menu_tutorial_open": "Open usage tutorial (HTML)",
+        "menu_author": "About Author",
+        "menu_author_open": "Author & QQ group",
+        "menu_about": "About App",
+        "menu_about_open": "Tool intro / How it works",
+        "about_app_title": "About SFS Pack Tool",
+        "about_author_title": "About the Author",
+        "about_close": "Close",
+        "link_qq": "Join QQ group 【𝔸𝔽𝕊 ℍ𝕦𝕓】",
+        "qq_hint": "QQ group: 923038827",
+        "log_align_done": "[NoHang] Done: rewrote {rewritten} prefab/asset, {refs} script refs",
+        "log_align_skip": "[NoHang] Not run: {error}",
+        "log_align_fail": "[NoHang] Alignment failed; exported project unaffected: {exc}",
+        "log_shader_fail_export": "[Shader] Handling failed; exported project unaffected: {exc}",
+        "log_merge_done": "[Merge] Pure-new merge package {pkg}: new parts {new}, skipped existing {skip}, copied assets {copy}",
+        "log_merge_none": "[Merge] Not generated: {error}",
+        "log_merge_fail": "[Merge] Generation failed; exported project unaffected: {exc}",
+        "log_verify_hit": "[Verify] Exported project script refs: hit {hit}/{total}, missing {miss}",
+        "log_verify_missing": "[Verify] [!] {n} prefabs have missing script refs: {files}",
+        "log_verify_fail": "[Verify] Self-check of script refs failed; export result unaffected: {exc}",
+        "about_app_text": "SFS Pack Tool is an all-in-one mod tool covering:\n• Localization: extract/write translatable text from mod.pack\n• Prefab export: decompile .pack into a Unity project via the bundled AssetRipper\n• No-hang alignment: auto-swap AssetRipper placeholder scripts for real Toolkit sources\n• Stub shader fix: replace black-board-causing placeholder shaders with real ones\n• Dangling-ref self-heal: fix or import missing assets by name/GUID\n• Merge package: trim only the new content Toolkit lacks, then merge safely\n\nHow it works: export stages in a temp dir, prefers copy-mode to swap in real shader sources (keeping GUIDs), rewrites script GUID maps by class name, then pre-checks GUID collisions.",
+        "about_author_text": "Author: A Future star (localization)\nThis tool is localized and maintained by A Future star to lower the SFS modding barrier.\nFor questions or suggestions, join the QQ group.",
     },
 }
+
+
+def _zh2en(msg: str) -> str:
+    """把 keepalive 内部日志里的中文(主要前缀标签与少量短语)翻成英文。
+
+    轻量替换：先翻 [标签]，再翻少量多词短语；数字/文件名/列表原样保留，
+    因此英文模式下日志以英文呈现，且不会丢失关键信息。
+    """
+    if not msg:
+        return msg
+    tags = {
+        "[免挂]": "[NoHang]",
+        "[着色器]": "[Shader]",
+        "[合并]": "[Merge]",
+        "[悬空]": "[Dangling]",
+        "[对齐]": "[Align]",
+        "[自定义]": "[Custom]",
+        "[命名]": "[Name]",
+        "[修复]": "[Repair]",
+        "[安装]": "[Install]",
+        "[校验]": "[Verify]",
+    }
+    phrases = [
+        ("空壳", "stub"),
+        ("说明这份 Toolkit 混入了 AssetRipper 占位 stub", "this Toolkit contains AssetRipper placeholder stubs"),
+        ("会自动跳过这些 stub 但建议换成干净的 Toolkit 工程", "these stubs are auto-skipped; recommend a clean Toolkit project"),
+        ("这份 Toolkit 被 AssetRipper 处理过 建议清理后重试", "this Toolkit was processed by AssetRipper; clean it then retry"),
+        ("这份 Toolkit 自带的部件就有", "this Toolkit's own bundled parts have"),
+        ("通常是 Toolkit 版本与 mod 作者用的不一致", "usually the Toolkit version differs from the mod author's"),
+        ("或 .meta 被重新生成过", "or the .meta was regenerated"),
+        ("这种情况下免挂不会生效", "in this case NoHang won't take effect"),
+        ("请换成与 mod 作者相同的 Toolkit 版本", "use the same Toolkit version as the mod author"),
+        ("以下类在 Toolkit 中无源码 无法保证解析(可能来自 mod 的 CodeAssembly)", "these classes have no source in the Toolkit; parsing not guaranteed (may come from the mod's CodeAssembly)"),
+        ("个文件仍存在未解析脚本引用", " files still have unresolved script references"),
+        ("Toolkit 脚本数", "Toolkit script count:"),
+        ("Toolkit 自身有", "Toolkit itself has"),
+        ("个重复类型定义", " duplicate type definitions"),
+        ("Toolkit 自检 自带部件", "Toolkit self-check: bundled parts"),
+        ("脚本引用命中", "script refs hit"),
+        ("处脚本对不上", " script refs unmatched"),
+        ("包内脚本类数(并集)", "pack script classes (union):"),
+        ("该 pack 未携带 CodeAssembly", "this pack has no CodeAssembly"),
+        ("个自定义脚本 拿不到源码 只能保留空壳 stub", " custom scripts: no source, kept as stubs"),
+        ("个将被替换的 AssetRipper stub 脚本", " AssetRipper stub scripts to be replaced"),
+        ("未找到 Toolkit 脚本目录 跳过导入", "Toolkit script dir not found; import skipped"),
+        ("个 Toolkit 脚本(含 .meta)", " Toolkit scripts (with .meta)"),
+        ("个 Toolkit 自带的 AssetRipper stub", " AssetRipper stubs bundled in Toolkit"),
+        ("已建立脚本 GUID 重写映射", "Built script GUID rewrite map:"),
+        ("个 prefab/asset 共", " prefabs/assets, total"),
+        ("处脚本引用", " script references"),
+        ("已重写", "Rewrote"),
+        ("已删除", "Deleted"),
+        ("已整拷", "Copied"),
+        ("已跳过", "Skipped"),
+        ("已换成 Toolkit 真着色器", "replaced with real Toolkit shaders"),
+        ("Toolkit 里找不到同名真着色器", "no same-named real shader found in Toolkit"),
+        ("空壳着色器处理失败", "stub shader handling failed"),
+        ("合并包着色器重指向失败", "merge-package shader redirect failed"),
+        ("同名资源对齐失败", "same-name asset alignment failed"),
+        ("GUID 冲突", "GUID collision"),
+        ("处 拷入后可能与 Toolkit 既有资产撞 GUID", " locations; may collide with existing Toolkit assets"),
+        ("新增部件", "new parts:"),
+        ("Toolkit 已有而跳过", "already in Toolkit, skipped:"),
+        ("个新增部件文件名重复 只保留第一个", " new parts have duplicate filenames; kept only the first"),
+        ("已带上 mod 程序集", "bundled mod assembly"),
+        ("个(DLL) 自定义脚本引用据此解析", " (DLL); custom script refs resolved accordingly"),
+        ("已带上 ModCode 自定义脚本", "bundled ModCode custom scripts:"),
+        ("自定义脚本引用据此解析", "custom script refs resolved accordingly"),
+        ("类型重复定义", "duplicate type definition"),
+        ("保留", "kept"),
+        ("删除", "deleted"),
+        ("个资产的 m_Name 对齐到文件名", " assets had m_Name aligned to filename"),
+        ("检出 CodeAssembly", "found CodeAssembly"),
+        ("字节 已导出", "bytes, exported"),
+        ("已把 DLL 放在", "DLL placed at"),
+        ("可用 ILSpy 或 dnSpy 手动反编译", "use ILSpy or dnSpy to decompile manually"),
+        ("保留 mod 自有程序集", "kept mod's own assembly"),
+        ("prefab 的自定义脚本引用已指向该 DLL → 导出工程可直接解析，无需挂接", "prefab custom script refs now point to this DLL -> project parses directly, no mounting needed"),
+        ("反编译源码另存为工程外", "decompiled sources saved outside the project"),
+        ("文件) 供阅读 / 改后重编译", "files) for reading / recompiling after edits"),
+        ("已从 DLL 还原", "restored from DLL"),
+        ("个自定义脚本文件 → Assets/Scripts/", " custom script files -> Assets/Scripts/"),
+        ("其中", "of which"),
+        ("个是 prefab 引用的类", "are classes referenced by prefabs"),
+        ("扫描到", "Scanned"),
+        ("处悬空引用", "dangling references"),
+        ("已按同名重定向", "redirected by name:"),
+        ("已补入 Toolkit 缺失资产", "imported missing Toolkit assets:"),
+        ("无法自动修复", "could not be auto-fixed:"),
+        ("处 清单见", " locations; manifest at"),
+        ("未提供原始 mod 工程目录 仅完成扫描+清单 如需自动修复请填写原始 mod 工程目录", "original mod project dir not provided; scan+manifest only. Provide it to auto-fix."),
+        ("与 Toolkit 同名资源", "same-name assets as Toolkit:"),
+        ("个 全部保留了 mod 版本", " all kept the mod version"),
+        ("与 Toolkit 同名的原版资源", "original assets same-named as Toolkit:"),
+        ("个 已改指 Toolkit 那份(重写引用", " redirected to the Toolkit copy (rewrote refs"),
+        ("处 移除副本", " locations, removed copies"),
+        ("个同名资源内容与 Toolkit 不同 已保留 mod 版本并改名", " same-named assets differ from Toolkit, kept mod version and renamed"),
+        ("未发现悬空引用 Toolkit 已是干净的", "no dangling references found; Toolkit is clean"),
+        ("纯新增合并包", "pure-new merge package"),
+        ("跳过已有", "skipped existing"),
+        ("拷贝资产", "copied assets"),
+        ("完成 重写", "done: rewrote"),
+        ("未执行", "not run:"),
+        ("对齐失败 不影响已导出的工程", "alignment failed; exported project unaffected:"),
+        ("处理失败 不影响已导出的工程", "handling failed; exported project unaffected:"),
+        ("未生成", "not generated:"),
+        ("生成失败 不影响已导出的工程", "generation failed; exported project unaffected:"),
+        ("导出工程脚本引用 命中", "exported project script refs hit"),
+        ("缺失", "missing"),
+        ("个 prefab 存在缺失脚本引用", "prefabs have missing script refs"),
+        ("自检脚本引用失败 不影响导出结果", "self-check of script refs failed; export result unaffected:"),
+    ]
+    out = msg
+    for zh, en in tags.items():
+        out = out.replace(zh, en)
+    for zh, en in sorted(phrases, key=lambda kv: len(kv[0]), reverse=True):
+        if zh in out:
+            out = out.replace(zh, en)
+    return out
 
 
 def resource_path(relative: str) -> Path:
@@ -775,7 +951,6 @@ class App:
         export.pack(fill="x", padx=12, pady=4)
         tk.Label(export, text=self.t("toolkit_dir")).grid(row=0, column=0, sticky="w")
         tk.Entry(export, textvariable=self.toolkit_dir_var).grid(row=0, column=1, sticky="ew", padx=5)
-        tk.Button(export, text=self.t("select_toolkit"), command=self.pick_toolkit_dir, width=14).grid(row=0, column=2, padx=3)
         tk.Label(export, text=self.t("builtin_ripper_hint"), fg="#555555", wraplength=650, justify="left").grid(row=1, column=1, columnspan=2, sticky="w", padx=5)
         tk.Label(export, text=self.t("toolkit_hint"), fg="#555555", wraplength=650, justify="left").grid(row=2, column=1, columnspan=2, sticky="w", padx=5)
         tk.Checkbutton(export, text=self.t("install_opt"), variable=self.install_var,
@@ -786,8 +961,9 @@ class App:
             .grid(row=4, column=1, columnspan=2, sticky="w", padx=5, pady=(7, 0))
         tk.Label(export, text=self.t("package_dir_label")).grid(row=5, column=0, sticky="w", pady=(7, 0))
         tk.Entry(export, textvariable=self.package_dir_var).grid(row=5, column=1, sticky="ew", padx=5, pady=(7, 0))
-        tk.Button(export, text=self.t("select_package"), command=self.pick_package_dir, width=14)\
-            .grid(row=5, column=2, padx=3, pady=(7, 0))
+        # 合并：Toolkit 路径与原始 mod 工程目录合成一个按钮，一次选完两个
+        tk.Button(export, text=self.t("pick_projects"), command=self.pick_project_dirs, width=32)\
+            .grid(row=6, column=1, columnspan=2, sticky="w", padx=5, pady=(7, 0))
         export.columnconfigure(1, weight=1)
 
         strip = tk.LabelFrame(self.root, text=self.t("strip_frame"), padx=8, pady=8)
@@ -807,6 +983,7 @@ class App:
         if not self.logs:
             self.logs.append(self.t("ready"))
         self.refresh_logs()
+        self.build_menubar()
 
     def refresh_logs(self) -> None:
         self.log_widget.configure(state="normal")
@@ -843,6 +1020,12 @@ class App:
                 self.log_widget.see(tk.END)
                 self.log_widget.configure(state="disabled")
         self.root.after(0, append)
+
+    def tlog(self, message: str) -> None:
+        """日志翻译包装：英文模式下把 keepalive 内部的中文日志翻成英文。"""
+        if self.locale == "en":
+            message = _zh2en(message)
+        self.log(message)
 
     def run_async(self, operation) -> None:
         def worker() -> None:
@@ -901,6 +1084,74 @@ class App:
             self.save_user_settings()
             self.log(self.t("selected_toolkit", path=path))
 
+    def pick_project_dirs(self) -> None:
+        """合并按钮：一次选完 Modding Toolkit 路径与原始 mod 工程目录。"""
+        tk_dir = filedialog.askdirectory(title=self.t("select_toolkit"))
+        if not tk_dir:
+            return
+        resolved = resolve_toolkit_root(tk_dir)
+        if resolved is not None and str(resolved) != str(Path(tk_dir).resolve()):
+            self.log(self.t("toolkit_root_fixed", path=str(resolved)))
+            tk_dir = str(resolved)
+        self.toolkit_dir_var.set(tk_dir)
+        pk_dir = filedialog.askdirectory(title=self.t("package_dir_label"))
+        if pk_dir:
+            self.package_dir_var.set(pk_dir)
+        self.save_user_settings()
+        self.log(self.t("selected_toolkit", path=tk_dir))
+
+    def build_menubar(self) -> None:
+        menubar = tk.Menu(self.root)
+        tut = tk.Menu(menubar, tearoff=0)
+        tut.add_command(label=self.t("menu_tutorial_open"), command=self.open_tutorial)
+        menubar.add_cascade(label=self.t("menu_tutorial"), menu=tut)
+
+        auth = tk.Menu(menubar, tearoff=0)
+        auth.add_command(label=self.t("menu_author_open"), command=self.show_about_author)
+        menubar.add_cascade(label=self.t("menu_author"), menu=auth)
+
+        abt = tk.Menu(menubar, tearoff=0)
+        abt.add_command(label=self.t("menu_about_open"), command=self.show_about_app)
+        menubar.add_cascade(label=self.t("menu_about"), menu=abt)
+
+        self.root.configure(menu=menubar)
+
+    def open_tutorial(self) -> None:
+        tut = Path(__file__).resolve().parent / "tutorial.html"
+        if tut.is_file():
+            webbrowser.open(tut.as_uri())
+        else:
+            messagebox.showinfo(self.t("menu_tutorial"), self.t("tutorial_missing"))
+
+    def show_about_author(self) -> None:
+        win = tk.Toplevel(self.root)
+        win.title(self.t("about_author_title"))
+        win.transient(self.root)
+        win.grab_set()
+        win.resizable(False, False)
+        body = tk.Frame(win, padx=18, pady=14)
+        body.pack()
+        tk.Label(body, text=self.t("about_author_text"), justify="left", wraplength=440, anchor="w").pack(anchor="w")
+        tk.Label(body, text="", pady=6).pack()
+        link = tk.Label(body, text=self.t("link_qq"), fg="#1a6ed8", cursor="hand2", wraplength=440, anchor="w")
+        link.pack(anchor="w")
+        link.bind("<Button-1>", lambda _e: webbrowser.open("https://qm.qq.com/q/3NAzgXluEo"))
+        tk.Label(body, text=self.t("qq_hint"), wraplength=440, anchor="w", fg="#555555").pack(anchor="w")
+        tk.Button(body, text=self.t("about_close"), command=win.destroy, width=12).pack(pady=(12, 0))
+
+    def show_about_app(self) -> None:
+        win = tk.Toplevel(self.root)
+        win.title(self.t("about_app_title"))
+        win.transient(self.root)
+        win.grab_set()
+        body = tk.Frame(win, padx=18, pady=14)
+        body.pack(fill="both", expand=True)
+        txt = tk.Text(body, wrap="word", width=66, height=18, relief="flat")
+        txt.insert("1.0", self.t("about_app_text"))
+        txt.configure(state="disabled")
+        txt.pack(fill="both", expand=True)
+        tk.Button(body, text=self.t("about_close"), command=win.destroy, width=12).pack(pady=(12, 0))
+
     def pick_strip_output(self) -> None:
         if self.input_file:
             default_name = f"{Path(self.input_file).stem}-{self.platform_var.get()}.pack"
@@ -954,6 +1205,7 @@ class App:
             toolkit_dir = str(resolved)
             self.toolkit_dir_var.set(toolkit_dir)
             self.log(self.t("toolkit_root_fixed", path=toolkit_dir))
+        package_dir = self.package_dir_var.get().strip()
         self.save_user_settings()
         self._export_busy = True
         if getattr(self, "export_btn", None):
@@ -962,6 +1214,8 @@ class App:
         def _run(log) -> None:
             try:
                 self.export_project(log, output, toolkit_dir, bool(self.install_var.get()))
+                # 合并：一键导出同时清理 Toolkit 空壳着色器与悬空引用
+                self.repair_toolkit(log, toolkit_dir, package_dir)
             finally:
                 self.root.after(0, _done)
 
@@ -989,8 +1243,8 @@ class App:
         log(self.t("repair_start"))
         try:
             import sfs_script_keep_alive as keepalive
-            keepalive.log = log
-            rep = keepalive.repair_toolkit_shaders(Path(toolkit_dir), log=log, backup=True)
+            keepalive.log = self.tlog
+            rep = keepalive.repair_toolkit_shaders(Path(toolkit_dir), log=self.tlog, backup=True)
         except Exception as exc:
             log(self.t("processing_failed", error=exc))
             rep = {}
@@ -1003,7 +1257,7 @@ class App:
         # 悬空引用自愈扫描（提供原始 mod 工程目录可自动修复，否则只扫描+清单）
         try:
             drep = keepalive.repair_toolkit_dangling_refs(
-                Path(toolkit_dir), package_assets=package_dir or None, log=log, backup=True)
+                Path(toolkit_dir), package_assets=package_dir or None, log=self.tlog, backup=True)
         except Exception as exc:
             log(self.t("processing_failed", error=exc))
             return
@@ -1034,50 +1288,50 @@ class App:
         if toolkit_dir and Path(toolkit_dir).is_dir():
             try:
                 import sfs_script_keep_alive as keepalive
-                keepalive.log = log
+                keepalive.log = self.tlog
                 report = keepalive.align_scripts_to_toolkit(
                     exported_dir,
                     Path(self.input_file),
                     Path(toolkit_dir),
-                    log=log,
+                    log=self.tlog,
                 )
                 if report.get("ok"):
-                    log(f"[免挂] 完成 重写 {report.get('rewritten_prefabs', 0)} 个 prefab/asset {report.get('rewritten_refs', 0)} 处脚本引用")
+                    log(self.t("log_align_done", rewritten=report.get('rewritten_prefabs', 0), refs=report.get('rewritten_refs', 0)))
                 else:
-                    log(f"[免挂] 未执行 {report.get('error')}")
+                    log(self.t("log_align_skip", error=report.get('error')))
             except Exception as exc:
-                log(f"[免挂] 对齐失败 不影响已导出的工程 {exc}")
+                log(self.t("log_align_fail", exc=exc))
 
             # 1.5) 自动处理“黑板”：把 AssetRipper 空壳着色器就地换成 Toolkit 真源码
             try:
                 import sfs_script_keep_alive as keepalive
                 srep = keepalive.fix_stub_shaders(
-                    exported_dir / "Assets", Path(toolkit_dir), log=log, mode="copy"
+                    exported_dir / "Assets", Path(toolkit_dir), log=self.tlog, mode="copy"
                 )
                 if srep.get("stubs"):
                     log(self.t("shader_fixed", n=srep["stubs"]))
                     if srep.get("unmatched"):
                         log(self.t("shader_unmatched", n=len(srep["unmatched"]), names=sorted(set(srep["unmatched"]))))
             except Exception as exc:
-                log(f"[着色器] 处理失败 不影响已导出的工程 {exc}")
+                log(self.t("log_shader_fail_export", exc=exc))
 
             # 2) 纯新增合并包
             try:
                 import sfs_script_keep_alive as keepalive
-                keepalive.log = log
+                keepalive.log = self.tlog
                 mrep = keepalive.build_merge_package(
                     exported_dir,
                     Path(self.input_file),
                     Path(toolkit_dir),
                     merge_dir,
-                    log=log,
+                    log=self.tlog,
                 )
                 if mrep.get("ok"):
-                    log(f"[合并] 纯新增合并包 {mrep['package_dir']} 新增部件 {mrep['new_parts']} 跳过已有 {mrep['skipped_parts']} 拷贝资产 {mrep['copied_files']}")
+                    log(self.t("log_merge_done", pkg=mrep['package_dir'], new=mrep['new_parts'], skip=mrep['skipped_parts'], copy=mrep['copied_files']))
                 else:
-                    log(f"[合并] 未生成 {mrep.get('error')}")
+                    log(self.t("log_merge_none", error=mrep.get('error')))
             except Exception as exc:
-                log(f"[合并] 生成失败 不影响已导出的工程 {exc}")
+                log(self.t("log_merge_fail", exc=exc))
 
             # 3) 可选：并入 Toolkit。默认关闭；开启时绝不覆盖内容正常的既有文件，
             #    但会对"已存在却引用悬空"的资产做修复性覆盖（先备份）。
@@ -1107,16 +1361,16 @@ class App:
                     total_missing += res["missing"]
                     if res["missing"]:
                         missing_files.append(str(prefab.relative_to(exported_dir)))
-                log(f"[校验] 导出工程脚本引用 命中 {total_refs - total_missing}/{total_refs} 缺失 {total_missing}")
+                log(self.t("log_verify_hit", hit=total_refs - total_missing, total=total_refs, miss=total_missing))
                 if total_missing:
-                    log(f"[校验] [!] {len(missing_files)} 个 prefab 存在缺失脚本引用 {missing_files[:8]}{'...' if len(missing_files) > 8 else ''}")
+                    log(self.t("log_verify_missing", n=len(missing_files), files=", ".join(missing_files[:8]) + ("..." if len(missing_files) > 8 else "")))
                     try:
                         with (merge_dir / "MERGE_README.md").open("a", encoding="utf-8") as fh:
                             fh.write(f"\n- 导出工程自检 {total_missing} 处脚本引用缺失 涉及 {len(missing_files)} 个 prefab 多为 mod 自定义类 需 CodeAssembly\n")
                     except OSError:
                         pass
             except Exception as exc:
-                log(f"[校验] 自检脚本引用失败 不影响导出结果 {exc}")
+                log(self.t("log_verify_fail", exc=exc))
 
         log(self.t("export_done"))
 
@@ -1195,12 +1449,12 @@ class App:
         if skipped_existing:
             log(self.t("install_skipped", n=skipped_existing))
         if written_parts:
-            log(f"[安装] 已把 {written_parts} 个新增部件并入 Toolkit {tk_assets}")
+            log(self.t("install_wrote_parts", n=written_parts, path=tk_assets))
             log(self.t("installed_to_toolkit", new=mrep.get("new_parts", 0), skip=mrep.get("skipped_parts", 0), copy=mrep.get("copied_files", 0), sub=mrep.get("parts_subfolder", "")))
         elif written:
-            log(f"[安装] 已写入 {written} 个文件 无新增 prefab {tk_assets}")
+            log(self.t("install_wrote_files", n=written, path=tk_assets))
         elif not repaired:
-            log("[安装] 没有新文件需要写入 Toolkit")
+            log(self.t("install_nothing"))
 
 
 if __name__ == "__main__":
