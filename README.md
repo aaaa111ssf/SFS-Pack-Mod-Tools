@@ -1,4 +1,4 @@
-# SFS Pack Mos Tools 是一站式 mod 工具，覆盖：
+# SFS Pack Tools 是一站式 mod 工具，覆盖：
 • 汉化：提取/写入 mod.pack 的可翻译文本  
 • Prefab 导出：用内置 AssetRipper 把 .pack 反编译成 Unity 工程  
 • 免挂对齐：自动把 AssetRipper 占位脚本换成 Toolkit 真源码  
